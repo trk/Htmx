@@ -2,8 +2,6 @@
 
 namespace ProcessWire;
 
-use Altivebir\Hook;
-
 /**
  * HTMX Module for ProcessWire
  * 
