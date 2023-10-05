@@ -48,8 +48,6 @@ class HtmxRequest
             $query = http_build_query(array_merge($parameters, $options['override']), '', $options['separator']);
 
             $url = "{$path}?{$query}";
-
-            bd($url);
         }
         
         return $url;
