@@ -8,6 +8,7 @@ namespace ProcessWire;
  * @property bool $loadAdminAssets
  * @property bool $loadFrontendAssets
  * @property bool $useService
+ * @property array $enableHtmxTemplates
  * @property array $disableCacheTemplates
  * @property array $prependTemplates
  * @property array $appendTemplates
@@ -54,6 +55,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('loadAdminAssets', true);
         $this->set('loadFrontendAssets', true);
         $this->set('useService', false);
+        $this->set('enableHtmxTemplate', []);
         $this->set('disableCacheTemplates', []);
         $this->set('prependTemplates', []);
         $this->set('appendTemplates', []);
@@ -129,22 +131,24 @@ class Htmx extends WireData implements Module, ConfigurableModule
                     /** @var string $template */
                     $template = $page->template->name;
 
-                    $disabledCacheTemplates = $this->getDisabledAppendTemplates();
+                    $enableHtmxTemplates = $this->getEnableHtmxTemplates();
+                    $disabledCacheTemplates = $this->getDisabledCacheTemplates();
                     $prependFiles = $this->getDisabledPrependTemplates();
                     $appendFiles = $this->getDisabledAppendTemplates();
 
-                    if (in_array($template, $disabledCacheTemplates)) {
+                    // disable cache
+                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $disabledCacheTemplates)) {
                         $options['allowCache'] = false;
                     }
 
                     // disable prepend template
-                    if (in_array($template, $prependFiles)) {
+                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $prependFiles)) {
                         $options['prependFile'] = '';
                         $options['prependFiles'] = [];
                     }
                     
                     // disable append templates files
-                    if (in_array($template, $appendFiles)) {
+                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $appendFiles)) {
                         $options['appendFile'] = '';
                         $options['appendFiles'] = [];$e->wire()->config->appendTemplateFile = '';
                     }
@@ -207,6 +211,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public function ___loadAdminAssets(): bool
     {
         return $this->loadAdminAssets;
+    }
+
+    public function ___getEnableHtmxTemplates(): array
+    {
+        return $this->enableHtmxTemplates;
     }
 
     public function ___getDisabledCacheTemplates(): array
@@ -355,6 +364,17 @@ class Htmx extends WireData implements Module, ConfigurableModule
             }
             $templates[$template->name] = $template->label ?: $template->name;
         }
+
+        /**
+         * @var InputfieldAsmSelect $select
+         */
+        $select = $modules->get('InputfieldAsmSelect');
+        $select->attr('name', 'enableHtmxTemplates');
+        $select->attr('value', $this->enableHtmxTemplates);
+        $select->label = $this->_('Enable Htmx on Selected Templates');
+        $select->description = $this->_('When request is Htmx, prepend files, append files and cache will be disabled for selected templates.');
+        $select->setOptions($templates);
+        $inputfields->add($select);
 
         /**
          * @var InputfieldAsmSelect $select
