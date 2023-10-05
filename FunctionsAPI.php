@@ -27,7 +27,7 @@ function hxInAdmin(): bool {
  * @return boolean
  */
 function isHtmxRequest(): bool {
-    return isset($_SERVER['HTTP_HX_REQUEST']) && ($_SERVER['HTTP_HX_REQUEST'] == 'true' || $_SERVER['HTTP_HX_REQUEST'] == true) ? true : false;
+    return wire('config')->htmx;
 }
 
 /**
@@ -104,6 +104,30 @@ function hxGetAssetUrl(string $from, string $filename = '', bool $http = false):
 }
 
 /**
+ * Request
+ * 
+ * @return \Altivebir\Htmx\HtmxRequest
+ */
+function hxRequest() {
+	return new \Altivebir\Htmx\HtmxRequest();
+}
+
+/**
+ * Response
+ *
+ * @param array|string|null $data Content, array value will be converted to json string
+ * @param int $status Status code
+ * 
+ * @return \Altivebir\Htmx\HtmxResponse
+ */
+function hxResponse(array|string|null $data = null, int $status = 200) {
+	return new \Altivebir\Htmx\HtmxResponse(
+        data: $data,
+        status: $status
+    );
+}
+
+/**
  * Redirect to given url
  *
  * @param string $url
@@ -112,7 +136,7 @@ function hxGetAssetUrl(string $from, string $filename = '', bool $http = false):
  */
 function hxSessionRedirect(string $url = '') {
     if (isHtmxRequest()) {
-        hxSetHeader('HX-Redirect', $url);
+        (string) hxResponse()->redirect($url);
     } else {
         /**
          * @var Session $session
@@ -127,96 +151,9 @@ function hxSessionRedirect(string $url = '') {
  *
  * @return void
  */
-function hxNotFoundRedirect() {
+function hxRedirectNotFound() {
     $page = wire('pages')->get(wire('config')->http404PageID);
     if ($page->id) {
-        hxSessionRedirect($page->httpUrl);
+        (string) hxResponse()->redirect($page->httpUrl);
     }
 }
-
-/**
- * Send a raw HTTP header
- *
- * @param string $name
- * @param string $content
- * @return void
- */
-function hxSetHeader(string $name, string $content) {
-	header("{$name}: {$content}");
-}
-
-/**
- * Send raw HTTP headers
- *
- * @param array $headers
- * @return void
- */
-function hxSetHeaders(array $headers = []) {
-	foreach ($headers as $name => $content) {
-		hxSetHeader($name, $content);
-	}
-}
-
-/**
- * Return merged response options array
- *
- * @param array $options
- * @return array
- */
-function hxResponseOptions(array $options = []): array {
-	return array_merge([
-		'status' => 200,
-		'headers' => []
-	], $options);
-}
-
-/**
- * Return text/html content
- *
- * @param string $response
- * @param array $options
- * @return void
- */
-function hxResponseHTML(string $response, array $options = []) {
-	$options = hxResponseOptions($options);
-	$options['headers']['Content-Type'] = 'text/html; charset=utf-8';
-	hxSetHeaders($options['headers']);
-	http_response_code($options['status']);
-	echo $response;
-	exit;
-}
-
-/**
- * Return application/json content
- *
- * @param array|string $response
- * @param array $options
- * @return void
- */
-function hxResponseJSON($response, array $options = []) {
-	$options = hxResponseOptions($options);
-	$options['headers']['Content-Type'] = 'application/json; charset=utf-8';
-	hxSetHeaders($options['headers']);
-	http_response_code($options['status']);
-	if (is_array($response)) {
-		echo json_encode($response);
-	} else {
-		echo $response;
-	}
-	exit;
-}
-
-/**
- * Return application/json or text/html content
- *
- * @param array|string $response
- * @return void
- */
-function hxResponse($response, array $options = []) {
-	if (is_array($response)) {
-		hxResponseJSON($response, $options);
-	} else {
-		hxResponseHTML($response, $options);
-	}
-}
-

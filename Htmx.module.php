@@ -18,6 +18,8 @@ namespace ProcessWire;
  */
 class Htmx extends WireData implements Module, ConfigurableModule
 {
+    protected array $requestHeaders = [];
+
     /**
      * Return module info
      *
@@ -57,8 +59,13 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('extensions', []);
         $this->set('templateEngines', []);
 
-        // Load composer libraries
+        // Load composer
         require __DIR__ . '/vendor/autoload.php';
+    }
+
+    public function wired()
+    {
+        $this->wire('htmx', $this);
     }
 
     /**
@@ -72,6 +79,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
          * @var Config $config
          */
         $config = $this->wire()->config;
+
+        $this->setRequestHeaders();
 
         $this->wire()->config->htmx = false;
 
@@ -93,7 +102,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->wire()->addHookBefore('Page::render', function(HookEvent $e) {
             /** @var Page $page */
             $page = $e->object;
-            $e->wire()->config->htmx = isHtmxRequest();
+            $e->wire()->config->htmx = $this->getRequestHeader('request') == 'true';
 
             if (isHtmxRequest()) {
                 /** @var string $template */
@@ -126,20 +135,29 @@ class Htmx extends WireData implements Module, ConfigurableModule
             });
 
         }
+    }
 
-        // Playground
-        $this->wire()->addHook(hxGetUrl('root', 'htmx/{tokenName}/{tokenValue}'), function (HookEvent $e) {
-            $csrf = $e->wire()->session->CSRF();
-            if ($csrf->getTokenName() == $e->tokenName && $csrf->getTokenValue() == $e->tokenValue) {
-                hxResponseHTML(
-                    <<<HTML
-                    <h2>Here is HTMX</h2>
-                    Token Name: <b>{$e->tokenName}</b><br>
-                    Token Value: <b>{$e->tokenValue}</b>
-                    HTML
-                );
-            }
-        });
+    protected function setRequestHeaders(): void
+    {
+        $requestHeaders = [
+            'boosted' => 'BOOSTED',
+            'currentURL' => 'CURRENT_URL',
+            'historyRestoreRequest' => 'HISTORY_RESTORE_REQUEST',
+            'prompt' => 'PROMPT',
+            'request' => 'REQUEST',
+            'target' => 'TARGET',
+            'triggerName' => 'TRIGGER_NAME',
+            'trigger' => 'TRIGGER'
+        ];
+
+        foreach ($requestHeaders as $key => $server) {
+            $this->requestHeaders[$key] = $_SERVER["HTTP_HX_{$server}"] ?? '';
+        }
+    }
+
+    public function getRequestHeader(string $name, $default = null)
+    {
+        return $this->requestHeaders[$name] ?? $default;
     }
 
     public function ___loadFrontendAssets(): bool
@@ -365,21 +383,6 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $checkboxes->addOption('handlebars', $this->_('[Handlebars](https://handlebarsjs.com) Minimal templating on steroids'));
         
         $inputfields->add($checkboxes);
-
-        $csrf = $this->wire()->session->CSRF();
-
-        /**
-         * @var InputfieldMarkup $checkbox
-         */
-        $url = hxGetUrl('root', 'htmx/' . $csrf->getTokenName() . '/' . $csrf->getTokenValue());
-        $markup = $modules->get('InputfieldMarkup');
-        $markup->label = $this->_('Playground');
-        $markup->value = <<<HTML
-            <button class="uk-button uk-button-primary uk-button-small" hx-get="{$url}" hx-target="#test-drive" hx-swap="innerHTML">TEST ME !</button>
-            <div id="test-drive"></div>
-        HTML;
-        $markup->collapsed = Inputfield::collapsedYes;
-        $inputfields->add($markup);
         
         return $inputfields;
     }
