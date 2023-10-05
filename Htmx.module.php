@@ -2,12 +2,15 @@
 
 namespace ProcessWire;
 
+use Altivebir\Hook;
+
 /**
  * HTMX Module for ProcessWire
  * 
  * @property bool $loadAdminAssets
  * @property bool $loadFrontendAssets
  * @property bool $useService
+ * @property array $disableCacheTemplates
  * @property array $prependTemplates
  * @property array $appendTemplates
  * @property array $extensions
@@ -53,6 +56,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('loadAdminAssets', true);
         $this->set('loadFrontendAssets', true);
         $this->set('useService', false);
+        $this->set('disableCacheTemplates', []);
         $this->set('prependTemplates', []);
         $this->set('appendTemplates', []);
         $this->set('extensions', []);
@@ -98,25 +102,62 @@ class Htmx extends WireData implements Module, ConfigurableModule
      */
     public function ready()
     {
-        // Set config htmx value and remove prepend, append template files for selected templates
-        $this->wire()->addHookBefore('Page::render', function(HookEvent $e) {
-            /** @var Page $page */
-            $page = $e->object;
+        // Set config htmx value and set options for renderPage method
+        $this->wire()->addHookBefore('PageRender::renderPage', function(HookEvent $e) {
+
             $e->wire()->config->htmx = $this->getRequestHeader('request') == 'true';
 
-            if (isHtmxRequest()) {
-                /** @var string $template */
-                $template = $page->template->name;
-                $disablePrependTemplates = $this->getDisabledPrependTemplates();
-                if (in_array($template, $disablePrependTemplates)) {
-                    $e->wire()->config->prependTemplateFile = '';
-                }
+            if ($e->wire()->config->htmx) {
+                /** @var HookEvent|null $event */
+                $event = $e->arguments(0);
 
-                $disableAppendTemplates = $this->getDisabledAppendTemplates();
-                if (in_array($template, $disableAppendTemplates)) {
-                    $e->wire()->config->appendTemplateFile = '';
+                if ($event instanceof HookEvent) {
+
+                    $options = [
+                        // Available options
+                        // 'filename' => '', // default blank means filename comes from $page
+                        // 'prependFile' => '',
+                        // 'prependFiles' => [],
+                        // 'appendFile' => '',
+                        // 'appendFiles' => [],
+                        // 'allowCache' => true,
+                        // 'forceBuildCache' => false,
+                        // 'pageStack' => [], // set after array_merge
+                    ];
+
+                    /** @var Page $page */
+                    $page = $event->object;
+                    
+                    /** @var string $template */
+                    $template = $page->template->name;
+
+                    $disabledCacheTemplates = $this->getDisabledAppendTemplates();
+                    $prependFiles = $this->getDisabledPrependTemplates();
+                    $appendFiles = $this->getDisabledAppendTemplates();
+
+                    if (in_array($template, $disabledCacheTemplates)) {
+                        $options['allowCache'] = false;
+                    }
+
+                    // disable prepend template
+                    if (in_array($template, $prependFiles)) {
+                        $options['prependFile'] = '';
+                        $options['prependFiles'] = [];
+                    }
+                    
+                    // disable append templates files
+                    if (in_array($template, $appendFiles)) {
+                        $options['appendFile'] = '';
+                        $options['appendFiles'] = [];$e->wire()->config->appendTemplateFile = '';
+                    }
+
+                    if ($options) {
+                        $event->arguments(0, $options);
+                        $e->arguments(0, $event);
+                    }
                 }
             }
+
         });
 
         if (!hxInAdmin() && $this->loadFrontendAssets()) {
@@ -168,6 +209,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public function ___loadAdminAssets(): bool
     {
         return $this->loadAdminAssets;
+    }
+
+    public function ___getDisabledCacheTemplates(): array
+    {
+        return $this->disableCacheTemplates;
     }
 
     public function ___getDisabledPrependTemplates(): array
@@ -316,12 +362,24 @@ class Htmx extends WireData implements Module, ConfigurableModule
          * @var InputfieldAsmSelect $select
          */
         $select = $modules->get('InputfieldAsmSelect');
+        $select->attr('name', 'disableCacheTemplates');
+        $select->attr('value', $this->disableCacheTemplates);
+        $select->label = $this->_('Disable Cache for Templates');
+        $select->description = $this->_('Choose templates for disable template caching, when request is htmx');
+        $select->setOptions($templates);
+        $select->columnWidth = 33;
+        $inputfields->add($select);
+
+        /**
+         * @var InputfieldAsmSelect $select
+         */
+        $select = $modules->get('InputfieldAsmSelect');
         $select->attr('name', 'prependTemplates');
         $select->attr('value', $this->prependTemplates);
         $select->label = $this->_('Disable Prepend Templates');
-        $select->description = $this->_('Choose templates for disable prepend template files');
+        $select->description = $this->_('Choose templates for disable prepend template files, when request is htmx.');
         $select->setOptions($templates);
-        $select->columnWidth = 50;
+        $select->columnWidth = 33;
         $inputfields->add($select);
 
         /**
@@ -331,9 +389,9 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $select->attr('name', 'appendTemplates');
         $select->attr('value', $this->appendTemplates);
         $select->label = $this->_('Disable Append Templates');
-        $select->description = $this->_('Choose templates for disable append template files');
+        $select->description = $this->_('Choose templates for disable append template files, when request is htmx.');
         $select->setOptions($templates);
-        $select->columnWidth = 50;
+        $select->columnWidth = 33;
         $inputfields->add($select);
 
         /**
