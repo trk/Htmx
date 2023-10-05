@@ -132,27 +132,28 @@ class Htmx extends WireData implements Module, ConfigurableModule
                     $template = $page->template->name;
 
                     $enableHtmxTemplates = $this->getEnableHtmxTemplates();
-                    $disabledCacheTemplates = $this->getDisabledCacheTemplates();
                     $prependFiles = $this->getDisabledPrependTemplates();
                     $appendFiles = $this->getDisabledAppendTemplates();
 
-                    // disable cache
-                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $disabledCacheTemplates)) {
-                        $options['allowCache'] = false;
-                    }
+                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $prependFiles) || in_array($template, $appendFiles)) {
+                        // disable cache
+                        if (in_array($template, $enableHtmxTemplates)) {
+                            $options['allowCache'] = false;
+                        }
 
-                    // disable prepend template
-                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $prependFiles)) {
-                        $options['prependFile'] = '';
-                        $options['prependFiles'] = [];
+                        // disable prepend template
+                        if (in_array($template, $prependFiles)) {
+                            $options['prependFile'] = '';
+                            $options['prependFiles'] = [];
+                        }
+
+                        // disable append templates files
+                        if (in_array($template, $appendFiles)) {
+                            $options['appendFile'] = '';
+                            $options['appendFiles'] = [];$e->wire()->config->appendTemplateFile = '';
+                        }
                     }
                     
-                    // disable append templates files
-                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $appendFiles)) {
-                        $options['appendFile'] = '';
-                        $options['appendFiles'] = [];$e->wire()->config->appendTemplateFile = '';
-                    }
-
                     if ($options) {
                         $event->arguments(0, $options);
                         $e->arguments(0, $event);
@@ -216,11 +217,6 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public function ___getEnableHtmxTemplates(): array
     {
         return $this->enableHtmxTemplates;
-    }
-
-    public function ___getDisabledCacheTemplates(): array
-    {
-        return $this->disableCacheTemplates;
     }
 
     public function ___getDisabledPrependTemplates(): array
@@ -355,6 +351,18 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
         $inputfields->add($checkbox);
 
+        /**
+         * @var InputfieldCheckbox $checkbox
+         */
+        $checkbox = $modules->get('InputfieldCheckbox');
+        $checkbox->attr('name','enableHtmx');
+        $checkbox->value = 1;
+        $checkbox->label = $this->_('Enable Htmx for All Templates');
+        $checkbox->description = $this->_('');
+        $checkbox->checked = $this->useService ?: false;
+
+        $inputfields->add($checkbox);
+
         // Get non system templates
         $templates = [];
         foreach ($this->wire()->templates as $template) {
@@ -380,24 +388,12 @@ class Htmx extends WireData implements Module, ConfigurableModule
          * @var InputfieldAsmSelect $select
          */
         $select = $modules->get('InputfieldAsmSelect');
-        $select->attr('name', 'disableCacheTemplates');
-        $select->attr('value', $this->disableCacheTemplates);
-        $select->label = $this->_('Disable Cache for Templates');
-        $select->description = $this->_('Choose templates for disable template caching, when request is htmx');
-        $select->setOptions($templates);
-        $select->columnWidth = 33;
-        $inputfields->add($select);
-
-        /**
-         * @var InputfieldAsmSelect $select
-         */
-        $select = $modules->get('InputfieldAsmSelect');
         $select->attr('name', 'prependTemplates');
         $select->attr('value', $this->prependTemplates);
-        $select->label = $this->_('Disable Prepend Templates');
-        $select->description = $this->_('Choose templates for disable prepend template files, when request is htmx.');
+        $select->label = $this->_('Disable Prepend Files and Caching');
+        $select->description = $this->_('Choose templates for disable prepend files and caching, when request is htmx.');
         $select->setOptions($templates);
-        $select->columnWidth = 33;
+        $select->columnWidth = 50;
         $inputfields->add($select);
 
         /**
@@ -406,10 +402,10 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $select = $modules->get('InputfieldAsmSelect');
         $select->attr('name', 'appendTemplates');
         $select->attr('value', $this->appendTemplates);
-        $select->label = $this->_('Disable Append Templates');
-        $select->description = $this->_('Choose templates for disable append template files, when request is htmx.');
+        $select->label = $this->_('Disable Append Files and Caching');
+        $select->description = $this->_('Choose templates for disable append files and caching, when request is htmx.');
         $select->setOptions($templates);
-        $select->columnWidth = 33;
+        $select->columnWidth = 50;
         $inputfields->add($select);
 
         /**
