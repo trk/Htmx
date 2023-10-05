@@ -9,7 +9,6 @@ namespace ProcessWire;
  * @property bool $loadFrontendAssets
  * @property bool $useService
  * @property array $enableHtmxTemplates
- * @property array $disableCacheTemplates
  * @property array $prependTemplates
  * @property array $appendTemplates
  * @property array $extensions
@@ -56,7 +55,6 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('loadFrontendAssets', true);
         $this->set('useService', false);
         $this->set('enableHtmxTemplate', []);
-        $this->set('disableCacheTemplates', []);
         $this->set('prependTemplates', []);
         $this->set('appendTemplates', []);
         $this->set('extensions', []);
