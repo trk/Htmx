@@ -20,6 +20,21 @@ class HtmxRequest
         return $this->htmx->getRequestHeader('boosted');
     }
 
+    protected function parseUrl(string $url)
+    {
+        $parsed = parse_url($url);
+        
+        $params = [];
+        
+        parse_str($parsed['query'] ?? '', $params);
+
+        return [
+            'url' => $url,
+            'path' => $parsed['path'],
+            'params' => $params
+        ];
+    }
+
     public function currentURL(array $options = [])
     {
         $options = array_merge([
@@ -30,27 +45,27 @@ class HtmxRequest
 
         $url = $this->htmx->getRequestHeader('currentURL');
 
-        if ($options['clear']) {
-            $httpHostUrl = wire('input')->httpHostUrl();
-            $url = str_replace($httpHostUrl, '', $url);
-        }
-        
-        if (is_array($options['override']) && $options['override']) {
-            $parsed = parse_url($url);
+        if ($url) {
+            if ($options['clear']) {
+                $httpHostUrl = wire('input')->httpHostUrl();
+                $url = str_replace($httpHostUrl, '', $url);
+            }
             
-            $path = $parsed['path'];
-            $query = $parsed['query'] ?? '';
-
-            $parameters = [];
-
-            parse_str($query, $parameters);
-            
-            $query = http_build_query(array_merge($parameters, $options['override']), '', $options['separator']);
-
-            $url = "{$path}?{$query}";
+            if (is_array($options['override']) && $options['override']) {
+                $parsed = $this->parseUrl($url);
+                
+                $parameters = http_build_query(array_merge($parsed['params'], $options['override']), '', $options['separator']);
+    
+                $url = "{$parsed['path']}?{$parameters}";
+            }
         }
         
         return $url;
+    }
+
+    public function parseCurrentUrl(array $options = [])
+    {
+        return $this->parseUrl($this->currentURL($options));
     }
 
     public function historyRestoreRequest()
