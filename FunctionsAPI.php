@@ -23,11 +23,37 @@ function hxInAdmin(): bool {
 
 /**
  * HTMX request ?
+ * 
+ * @param int $segment
+ * @param array|string $segments
  *
  * @return boolean
  */
-function isHtmxRequest(): bool {
-    return wire('config')->htmx;
+function isHtmxRequest(int $segment = 1, array|string $segments = ''): bool {
+
+    /**
+     * @var WireInput $input
+     * @var Config $config
+     */
+    $input = wire('input');
+    $config = wire('config');
+
+    if ($config->htmx) {
+
+        if ($segments) {
+
+            if (is_string($segments)) {
+                return $input->urlSegment($segment) == $segments;
+            }
+
+            return in_array($input->urlSegment($segment), $segments);
+        }
+        
+        return true;
+
+    }
+
+    return false;
 }
 
 /**
