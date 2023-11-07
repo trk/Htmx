@@ -7,7 +7,7 @@ class HtmxResponse
     protected array $headers = [];
 
     public function __construct(
-        protected array|string|null $data = null,
+        protected mixed $output = null,
         protected int $status = 200
     )
     {
@@ -105,11 +105,11 @@ class HtmxResponse
     /**
      * allows you to trigger client-side events
      * 
-     * @param string $trigger
+     * @param string|array $trigger
      */
-    public function trigger(string $trigger): HtmxResponse
+    public function trigger(string|array $trigger): HtmxResponse
     {
-        $this->headers['HX-Trigger'] = $trigger;
+        $this->headers['HX-Trigger'] = is_array($trigger) ? json_encode($trigger) : $trigger;
         return $this;
     }
 
@@ -156,7 +156,7 @@ class HtmxResponse
     protected function setHeaders(): void
     {
         if (!isset($this->headers['Content-Type'])) {
-            if ($this->data && is_array($this->data) || is_array(json_decode($this->data, true))) {
+            if ($this->output && is_array($this->output) || is_array(json_decode($this->output, true))) {
                 $this->header('Content-Type', 'application/json; charset=utf-8');
             } else {
                 $this->header('Content-Type', 'text/html; charset=utf-8');
@@ -174,12 +174,10 @@ class HtmxResponse
 
         http_response_code($this->status);
 
-        if ($this->data) {
-            if (is_array($this->data)) {
-                echo json_encode($this->data);
-            } else if (is_string($this->data)) {
-                echo $this->data;
-            }
+        if (is_array($this->output)) {
+            echo json_encode($this->output);
+        } else {
+            echo $this->output;
         }
 
         exit;

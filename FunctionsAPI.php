@@ -80,7 +80,7 @@ function hxGetPath(string $name, string $path = ''): string {
  * 
  * @return string
  */
-function hxGetUrl(string | Page $name, string $url = '', bool $http = false): string
+function hxGetUrl(string | Page $name, string $url = '', array|string $params = [], bool $http = false): string
 {
     if ($name instanceof Page) {
         $name = $http ? $name->httpUrl : $name->url;
@@ -94,8 +94,18 @@ function hxGetUrl(string | Page $name, string $url = '', bool $http = false): st
         }
         $name = $config->urls->{$name};
     }
+
+    $url = $name . $url;
+
+    if ($params) {
+        if (is_string($params)) {
+            $url .= $params;
+        } else {
+            $url .= '?' . http_build_query($params);
+        }
+    }
     
-    return $name . $url;
+    return $url;
 }
 
 /**
@@ -141,14 +151,14 @@ function hxRequest() {
 /**
  * Response
  *
- * @param array|string|null $data Content, array value will be converted to json string
+ * @param mixed $data Content, array value will be converted to json string
  * @param int $status Status code
  * 
  * @return \Altivebir\Htmx\HtmxResponse
  */
-function hxResponse(array|string|null $data = null, int $status = 200) {
+function hxResponse(mixed $output = null, int $status = 200) {
 	return new \Altivebir\Htmx\HtmxResponse(
-        data: $data,
+        output: $output,
         status: $status
     );
 }
