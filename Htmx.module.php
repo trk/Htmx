@@ -357,7 +357,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $checkbox->value = 1;
         $checkbox->label = $this->_('Enable Htmx for All Templates');
         $checkbox->description = $this->_('');
-        $checkbox->checked = $this->useService ?: false;
+        $checkbox->checked = $this->enableHtmx ?: false;
 
         $inputfields->add($checkbox);
 
