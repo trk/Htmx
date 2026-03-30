@@ -80,7 +80,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public function ready()
     {
         // Load Admin Assets
-        if (hxInAdmin()) {
+        if ($this->inAdmin()) {
             foreach ($this->getAssetUrls() as $url) {
                 $this->wire('config')->scripts->add($url);
             }
@@ -119,7 +119,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
             }
 
             // 3. Load Frontend Assets natively
-            if (!hxInAdmin() && $this->loadFrontendAssets) {
+            if (!$this->inAdmin() && $this->loadFrontendAssets) {
                 if (!$this->request->isHtmx() || $this->request->isBoosted() || $this->request->isHistoryRestore()) {
                     $scripts = "";
                     foreach ($this->getAssetUrls() as $url) {
@@ -180,7 +180,7 @@ HTML;
                 $this->extensions[] = $ext;
 
                 // If in Admin, append dynamically to the scripts array immediately
-                if (hxInAdmin()) {
+                if ($this->inAdmin()) {
                     $config = $this->wire('config');
                     $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
                     $config->scripts->add($baseUrl . "ext/{$ext}.js");
@@ -197,7 +197,7 @@ HTML;
     {
         if ($load && !$this->loadHyperscript) {
             $this->loadHyperscript = true;
-            if (hxInAdmin()) {
+            if ($this->inAdmin()) {
                 $config = $this->wire('config');
                 $minified = $config->debug ? '.js' : '.min.js';
                 $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
@@ -281,7 +281,7 @@ HTML;
         $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
         $urls[] = $baseUrl . "htmx" . $minified;
 
-        if (hxInAdmin() || $this->loadHyperscript) {
+        if ($this->inAdmin() || $this->loadHyperscript) {
             $urls[] = $baseUrl . "hyperscript" . $minified;
         }
 
@@ -347,13 +347,12 @@ HTML;
 
         return $inputfields;
     }
-}
-
-/**
- * Procedural helpers equivalent to previous version's utility file
- */
-function hxInAdmin(): bool
-{
-    $page = wire('page');
-    return $page && $page->template && $page->template->name == 'admin';
+    /**
+     * Determines if the current request is within the ProcessWire Admin.
+     */
+    private function inAdmin(): bool
+    {
+        $page = $this->wire('page');
+        return $page && $page->template && $page->template->name === 'admin';
+    }
 }
