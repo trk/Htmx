@@ -11,6 +11,12 @@ A production-ready HTMX module for ProcessWire. This module seamlessly brings th
 
 ## Installation
 
+**Via Composer (Recommended):**
+```bash
+composer require trk/processwire-htmx
+```
+
+**Via Manual Download:**
 1. Clone or copy this directory into `site/modules/Htmx/`.
 2. In the ProcessWire Admin, go to **Modules > Refresh**.
 3. Install **HTMX**.
