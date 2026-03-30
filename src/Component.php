@@ -129,8 +129,9 @@ abstract class Component extends WireData
 
             // 3. Core Enterprise Security: 
             // - Prevent calling constructor, hooks, or internal magic methods directly (`_`)
-            // - Prevent arbitrary execution of base Component methods (like hydrate, renderStatePayload)
-            if ($method->isPublic() && strpos($action, '_') !== 0 && $method->getDeclaringClass()->getName() !== self::class) {
+            // - Prevent arbitrary execution of base Component methods or inherited Wire/WireData methods
+            // Only methods explicitly declared on the user's subclass (or their custom traits) are allowed.
+            if ($method->isPublic() && strpos($action, '_') !== 0 && $method->getDeclaringClass()->isSubclassOf(self::class)) {
 
                 // Build parameters based on POST data mapping to method signature
                 $args = [];
