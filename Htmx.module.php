@@ -2,458 +2,358 @@
 
 namespace ProcessWire;
 
+use Totoglu\ProcessWire\Htmx\Request;
+use Totoglu\ProcessWire\Htmx\Response;
+use Totoglu\ProcessWire\Htmx\Fragment;
+
 /**
  * HTMX Module for ProcessWire
  * 
- * @property bool $loadAdminAssets
- * @property bool $loadFrontendAssets
- * @property bool $useService
- * @property array $enableHtmxTemplates
- * @property array $prependTemplates
- * @property array $appendTemplates
- * @property array $extensions
- * @property array $templateEngines
+ * Bringing HTMX integrations to ProcessWire natively. 
+ * Provides an elegant Request/Response API and State Components.
+ * 
+ * @property bool $loadFrontendAssets Load HTMX in Frontend?
+ * @property bool $loadHyperscript Load _hyperscript library?
+ * @property bool $autoFlashMessages Auto trigger flash messages?
+ * @property bool $autoExtractTargets Auto extract targets using DOM?
+ * @property array $extensions Extensions to load (sse, ws, etc)
  *
- * @author			: İskender TOTOĞLU, @ukyo (community), @trk (Github)
- * @website			: https://www.altivebir.com
+ * @author İskender TOTOĞLU, @ukyo (community), @trk (Github)
+ * @website https://www.totoglu.com
  */
 class Htmx extends WireData implements Module, ConfigurableModule
 {
-    protected array $requestHeaders = [];
+    /** @var Request */
+    public $request;
 
-    /**
-     * Return module info
-     *
-     * @return array
-     */
+    /** @var Response */
+    public $response;
+
+    /** @var Fragment */
+    public $fragment;
+
     public static function getModuleInfo()
     {
         return [
             'title' => 'HTMX',
-            'version' => 1,
-            'summary' => 'htmx gives you access to AJAX, CSS Transitions, WebSockets and Server Sent Events directly in HTML, using attributes, so you can build modern user interfaces with the simplicity and power of hypertext.',
-            'href' => 'https://www.altivebir.com',
-            'author' => 'İskender TOTOĞLU | @ukyo(community), @trk (Github), https://www.altivebir.com',
+            'version' => 100,
+            'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
+            'href' => 'https://github.com/trk/Htmx',
+            'author' => 'Iskender TOTOGLU @trk @ukyo',
             'requires' => [
                 'PHP>=8.1',
-                'ProcessWire>=3.0.173'
+                'ProcessWire>=3.0.210'
             ],
             'installs' => [],
             'permissions' => [],
-            'icon' => 'cogs',
-            'autoload' => 10000,
+            'icon' => 'code',
+            'autoload' => true,
             'singular' => true
         ];
     }
 
-    /**
-     * @inheritDoc
-     */
     public function __construct()
     {
-        $this->set('loadAdminAssets', true);
+        // Load the ProcessWire native ClassLoader for our `src` directory namespace
+        $this->wire('classLoader')->addNamespace('Totoglu\ProcessWire\Htmx', __DIR__ . '/src/');
+
         $this->set('loadFrontendAssets', true);
-        $this->set('useService', false);
-        $this->set('enableHtmxTemplate', []);
-        $this->set('prependTemplates', []);
-        $this->set('appendTemplates', []);
+        $this->set('loadHyperscript', false);
+        $this->set('autoFlashMessages', true);
+        $this->set('autoExtractTargets', false);
         $this->set('extensions', []);
-        $this->set('extensions', []);
-        $this->set('templateEngines', []);
-
-        // Load composer
-        require __DIR__ . '/vendor/autoload.php';
     }
 
-    public function wired()
-    {
-        $this->wire('htmx', $this);
-    }
-
-    /**
-     * Initialize module
-     *
-     * @return void
-     */
     public function init()
     {
-        /**
-         * @var Config $config
-         */
-        $config = $this->wire()->config;
+        $this->request = new Request();
+        $this->response = new Response();
+        $this->fragment = new Fragment();
 
-        $this->setRequestHeaders();
+        // Inject `$htmx` into ProcessWire's API.
+        $this->wire('htmx', $this);
 
-        $this->wire()->config->htmx = false;
-
-        if (hxInAdmin() && $this->loadAdminAssets()) {
-            foreach ($this->getAssets() as $asset) {
-                $config->scripts->add($asset);
-            }
-        }
+        // Alias for backwards/template convenience
+        $this->wire()->config->htmx = $this->request->isHtmx();
     }
 
-    /**
-     * @inheritDoc
-     *
-     * @return void
-     */
     public function ready()
     {
-        // Set config htmx value and set options for renderPage method
-        $this->wire()->addHookBefore('PageRender::renderPage', function(HookEvent $e) {
+        // Load Admin Assets
+        if (hxInAdmin()) {
+            foreach ($this->getAssetUrls() as $url) {
+                $this->wire('config')->scripts->add($url);
+            }
 
-            $e->wire()->config->htmx = $this->getRequestHeader('request') == 'true';
+            // Inject CSRF protection bridge
+            $baseUrl = $this->wire('config')->urls->siteModules . $this->className() . "/resources/assets/js/";
+            $this->wire('config')->scripts->add($baseUrl . "pw-csrf.js");
+        }
 
-            if ($e->wire()->config->htmx) {
-                /** @var HookEvent|null $event */
-                $event = $e->arguments(0);
+        // Hook after Page::render to process HTMX lifecycle
+        $this->wire()->addHookAfter('Page::render', function (HookEvent $e) {
+            $e->replace = true;
+            $html = $e->return;
 
-                if ($event instanceof HookEvent) {
-
-                    $options = [
-                        // Available options
-                        // 'filename' => '', // default blank means filename comes from $page
-                        // 'prependFile' => '',
-                        // 'prependFiles' => [],
-                        // 'appendFile' => '',
-                        // 'appendFiles' => [],
-                        // 'allowCache' => true,
-                        // 'forceBuildCache' => false,
-                        // 'pageStack' => [], // set after array_merge
-                    ];
-
-                    /** @var Page $page */
-                    $page = $event->object;
-                    
-                    /** @var string $template */
-                    $template = $page->template->name;
-
-                    $enableHtmxTemplates = $this->getEnableHtmxTemplates();
-                    $prependFiles = $this->getDisabledPrependTemplates();
-                    $appendFiles = $this->getDisabledAppendTemplates();
-
-                    if (in_array($template, $enableHtmxTemplates) || in_array($template, $prependFiles) || in_array($template, $appendFiles)) {
-                        // disable cache
-                        if (in_array($template, $enableHtmxTemplates)) {
-                            $options['allowCache'] = false;
-                        }
-
-                        // disable prepend template
-                        if (in_array($template, $prependFiles)) {
-                            $options['prependFile'] = '';
-                            $options['prependFiles'] = [];
-                        }
-
-                        // disable append templates files
-                        if (in_array($template, $appendFiles)) {
-                            $options['appendFile'] = '';
-                            $options['appendFiles'] = [];$e->wire()->config->appendTemplateFile = '';
+            // 1. Target Auto-Extraction (Partial Render)
+            if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
+                $targetId = $this->request->target();
+                if ($targetId && strpos($html, 'id="' . $targetId . '"') !== false) {
+                    libxml_use_internal_errors(true);
+                    $dom = new \DOMDocument();
+                    if (@$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
+                        $xpath = new \DOMXPath($dom);
+                        $nodes = $xpath->query("//*[@id='$targetId']");
+                        if ($nodes->length > 0) {
+                            $html = $dom->saveHTML($nodes->item(0));
                         }
                     }
-                    
-                    if ($options) {
-                        $event->arguments(0, $options);
-                        $e->arguments(0, $event);
+                    libxml_clear_errors();
+                }
+            }
+
+            // 2. Inject OOB swaps if any accumulated
+            $oob = $this->fragment->getOobSwaps();
+            if (!empty($oob) && $this->request->isHtmx() && !$this->request->isBoosted()) {
+                $html .= "\n" . $oob;
+            }
+
+            // 3. Load Frontend Assets natively
+            if (!hxInAdmin() && $this->loadFrontendAssets) {
+                if (!$this->request->isHtmx() || $this->request->isBoosted() || $this->request->isHistoryRestore()) {
+                    $scripts = "";
+                    foreach ($this->getAssetUrls() as $url) {
+                        $scripts .= "\n<script src=\"{$url}\"></script>";
+                    }
+
+                    // Frontend CSRF Auto-Protection
+                    $csrfName = $this->wire('session')->CSRF->getTokenName();
+                    $csrfValue = $this->wire('session')->CSRF->getTokenValue();
+                    $scripts .= <<<HTML
+
+<script>
+document.addEventListener('htmx:configRequest', function(evt) {
+    if (evt.detail.verb !== "get") {
+        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
+        evt.detail.headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+});
+</script>
+HTML;
+
+                    if (strpos($html, '</head>') !== false) {
+                        $html = str_replace('</head>', "{$scripts}\n</head>", $html);
                     }
                 }
             }
 
+            // 4. Auto Flash Messages to HX-Trigger-After-Swap
+            if ($this->autoFlashMessages && $this->request->isHtmx()) {
+                $messages = $this->wire('session')->getMessages(true);
+                $errors = $this->wire('session')->getErrors(true);
+
+                $flash = [];
+                if ($messages) {
+                    foreach ($messages as $m) $flash[] = ['type' => 'message', 'text' => $m instanceof Notice ? $m->text : (string)$m];
+                }
+                if ($errors) {
+                    foreach ($errors as $eMsg) $flash[] = ['type' => 'error', 'text' => $eMsg instanceof Notice ? $eMsg->text : (string)$eMsg];
+                }
+
+                if (!empty($flash)) {
+                    $this->response->triggerAfterSwap('pw-messages', $flash);
+                }
+            }
+
+            $e->return = $html;
         });
-
-        if (!hxInAdmin() && $this->loadFrontendAssets()) {
-
-            // Load Frontend assets
-            $this->wire()->addHookAfter('Page::render', function (HookEvent $e) {
-                $e->replace = true;
-                
-                $replace = "";
-
-                foreach ($this->getAssets() as $url) {
-                    $replace .= "\n<script src=\"{$url}\"></script>";
-                }
-                
-                $e->return = str_replace('</head>', "{$replace}\n</head>", $e->return);
-            });
-
-        }
-    }
-
-    protected function setRequestHeaders(): void
-    {
-        $requestHeaders = [
-            'boosted' => 'BOOSTED',
-            'currentURL' => 'CURRENT_URL',
-            'historyRestoreRequest' => 'HISTORY_RESTORE_REQUEST',
-            'prompt' => 'PROMPT',
-            'request' => 'REQUEST',
-            'target' => 'TARGET',
-            'triggerName' => 'TRIGGER_NAME',
-            'trigger' => 'TRIGGER'
-        ];
-
-        foreach ($requestHeaders as $key => $server) {
-            $this->requestHeaders[$key] = $_SERVER["HTTP_HX_{$server}"] ?? '';
-        }
-    }
-
-    public function getRequestHeader(string $name, $default = null)
-    {
-        return $this->requestHeaders[$name] ?? $default;
-    }
-
-    public function ___loadFrontendAssets(): bool
-    {
-        return $this->loadFrontendAssets;
-    }
-
-    public function ___loadAdminAssets(): bool
-    {
-        return $this->loadAdminAssets;
-    }
-
-    public function ___getEnableHtmxTemplates(): array
-    {
-        return $this->enableHtmxTemplates;
-    }
-
-    public function ___getDisabledPrependTemplates(): array
-    {
-        return $this->prependTemplates;
-    }
-
-    public function ___getDisabledAppendTemplates(): array
-    {
-        return $this->appendTemplates;
-    }
-    
-    public function ___useService(): bool
-    {
-        return $this->wire()->config->debug ? false : $this->useService;
-    }
-    
-    public function ___getExtensions(): array
-    {
-        return $this->extensions;
-    }
-
-    public function ___getTemplateEngines(): array
-    {
-        return $this->templateEngines;
-    }
-
-    protected function getAssets(): array
-    {
-        /**
-         * @var Config $config
-         */
-        $config = $this->wire()->config;
-
-        $extensions = $this->getExtensions();
-        $templateEngines = $this->getTemplateEngines();
-        $useService = $this->useService();
-        $minified = $config->debug ? '' : '.min';
-
-        $assets = [];
-
-        if ($useService) {
-            $assets[] = "https://cdn.jsdelivr.net/npm/htmx.org@1.9.6/dist/htmx{$minified}.js";
-        } else {
-            $assets[] = hxGetAssetUrl($this->className(), "resources/assets/js/htmx{$minified}.js");
-        }
-        
-        foreach ($extensions ?: [] as $extension) {
-            if ($useService) {
-                $assets[] = "https://cdn.jsdelivr.net/npm/htmx.org@1.9.6/dist/ext/{$extension}.js";
-            } else {
-                $assets[] = hxGetAssetUrl($this->className(), "resources/assets/js/ext/{$extension}.js");
-            }
-        }
-
-        if (in_array('client-side-templates', $extensions) && $templateEngines) {
-            if ($useService) {
-                if (in_array('nunjucks', $templateEngines)) {
-                    $assets[] = 'https://cdn.jsdelivr.net/npm/nunjucks@3.2.4/browser/nunjucks.min.js';
-                }
-                if (in_array('mustache', $templateEngines)) {
-                    $assets[] = 'https://cdn.jsdelivr.net/npm/mustache@4.2.0/mustache.min.js';
-                }
-            } else {
-                if (in_array('nunjucks', $templateEngines)) {
-                    $assets[] = hxGetAssetUrl($this->className(), "resources/assets/js/nunjucks{$minified}.js");
-                }
-                if (in_array('mustache', $templateEngines)) {
-                    $assets[] = hxGetAssetUrl($this->className(), "resources/assets/js/mustache{$minified}.js");
-                }
-            }
-
-            if (in_array('handlebars', $templateEngines)) {
-                $assets[] = 'https://cdn.jsdelivr.net/npm/handlebars@4.7.8/dist/cjs/handlebars.min.js';
-            }
-        }
-        
-        if ($config->debug) {
-            if ($useService) {
-                $assets[] = "https://cdn.jsdelivr.net/npm/htmx.org@1.9.6/dist/ext/debug.js";
-            } else {
-                $assets[] = hxGetAssetUrl($this->className(), "resources/assets/js/ext/debug.js");
-            }
-        }
-
-        return $assets;
     }
 
     /**
-	 * Module configurations
-	 * 
-	 * @param InputfieldWrapper $inputfields
-	 *
-	 */
-	public function getModuleConfigInputfields(InputfieldWrapper $inputfields)
+     * Dynamically load an extension at runtime via API.
+     */
+    public function loadExtension($extension): self
     {
-        /** @var Modules $modules */
-        $modules = $this->wire()->modules;
+        $extensions = (array) $extension;
+        foreach ($extensions as $ext) {
+            if (!in_array($ext, $this->extensions)) {
+                $this->extensions[] = $ext;
 
-        /**
-         * @var InputfieldCheckbox $checkbox
-         */
-        $checkbox = $modules->get('InputfieldCheckbox');
-        $checkbox->attr('name','loadAdminAssets');
-        $checkbox->label = $this->_('Load Admin Assets');
-        $checkbox->checked = $this->loadAdminAssets ?: false;
-        $checkbox->columnWidth = 50;
-
-        $inputfields->add($checkbox);
-
-        /**
-         * @var InputfieldCheckbox $checkbox
-         */
-        $checkbox = $modules->get('InputfieldCheckbox');
-        $checkbox->attr('name','loadFrontendAssets');
-        $checkbox->label = $this->_('Load Frontend Assets');
-        $checkbox->checked = $this->loadFrontendAssets ?: false;
-        $checkbox->columnWidth = 50;
-
-        $inputfields->add($checkbox);
-
-        /**
-         * @var InputfieldCheckbox $checkbox
-         */
-        $checkbox = $modules->get('InputfieldCheckbox');
-        $checkbox->attr('name','useService');
-        $checkbox->value = 1;
-        $checkbox->label = $this->_('Use CDN Service');
-        $checkbox->description = $this->_('Use a CDN service instance of loading local files.');
-        $checkbox->notes = $this->_('This will work in production only. `$config->debug = false;`');
-        $checkbox->checked = $this->useService ?: false;
-
-        $inputfields->add($checkbox);
-
-        /**
-         * @var InputfieldCheckbox $checkbox
-         */
-        $checkbox = $modules->get('InputfieldCheckbox');
-        $checkbox->attr('name','enableHtmx');
-        $checkbox->value = 1;
-        $checkbox->label = $this->_('Enable Htmx for All Templates');
-        $checkbox->description = $this->_('');
-        $checkbox->checked = $this->enableHtmx ?: false;
-
-        $inputfields->add($checkbox);
-
-        // Get non system templates
-        $templates = [];
-        foreach ($this->wire()->templates as $template) {
-            /** @var Template $template */
-            if ($template->flags == Template::flagSystem) {
-                continue;
+                // If in Admin, append dynamically to the scripts array immediately
+                if (hxInAdmin()) {
+                    $config = $this->wire('config');
+                    $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
+                    $config->scripts->add($baseUrl . "ext/{$ext}.js");
+                }
             }
-            $templates[$template->name] = $template->label ?: $template->name;
+        }
+        return $this;
+    }
+
+    /**
+     * Dynamically load the _hyperscript library via API.
+     */
+    public function loadHyperscript(bool $load = true): self
+    {
+        if ($load && !$this->loadHyperscript) {
+            $this->loadHyperscript = true;
+            if (hxInAdmin()) {
+                $config = $this->wire('config');
+                $minified = $config->debug ? '.js' : '.min.js';
+                $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
+                $config->scripts->add($baseUrl . "hyperscript" . $minified);
+            }
+        } else {
+            $this->loadHyperscript = $load;
+        }
+        return $this;
+    }
+
+    /**
+     * Developer Convenience API: Opt-in to HTMX and inject assets for this specific request.
+     * Useful if you disable "Load Frontend Assets" in settings and only want it on specific templates.
+     * 
+     * Example: $htmx->use('class-tools');
+     * Example: $htmx->use(extensions: ['sse', 'ws'], hyperscript: true);
+     * 
+     * @param string|array $extensions
+     * @param bool|null $hyperscript
+     */
+    public function use($extensions = [], ?bool $hyperscript = null): self
+    {
+        $this->loadFrontendAssets = true;
+
+        if (!empty($extensions)) {
+            $this->loadExtension($extensions);
         }
 
-        /**
-         * @var InputfieldAsmSelect $select
-         */
-        $select = $modules->get('InputfieldAsmSelect');
-        $select->attr('name', 'enableHtmxTemplates');
-        $select->attr('value', $this->enableHtmxTemplates);
-        $select->label = $this->_('Enable Htmx on Selected Templates');
-        $select->description = $this->_('When request is Htmx, prepend files, append files and cache will be disabled for selected templates.');
-        $select->setOptions($templates);
-        $inputfields->add($select);
+        if ($hyperscript !== null) {
+            $this->loadHyperscript($hyperscript);
+        }
 
-        /**
-         * @var InputfieldAsmSelect $select
-         */
-        $select = $modules->get('InputfieldAsmSelect');
-        $select->attr('name', 'prependTemplates');
-        $select->attr('value', $this->prependTemplates);
-        $select->label = $this->_('Disable Prepend Files and Caching');
-        $select->description = $this->_('Choose templates for disable prepend files and caching, when request is htmx.');
-        $select->setOptions($templates);
-        $select->columnWidth = 50;
-        $inputfields->add($select);
+        return $this;
+    }
 
-        /**
-         * @var InputfieldAsmSelect $select
-         */
-        $select = $modules->get('InputfieldAsmSelect');
-        $select->attr('name', 'appendTemplates');
-        $select->attr('value', $this->appendTemplates);
-        $select->label = $this->_('Disable Append Files and Caching');
-        $select->description = $this->_('Choose templates for disable append files and caching, when request is htmx.');
-        $select->setOptions($templates);
-        $select->columnWidth = 50;
-        $inputfields->add($select);
+    /**
+     * Manually render the <script> tags for HTMX, Hyperscript, and Extensions.
+     * Useful if your page doesn't have a </head> tag for automatic injection,
+     * or if you want to explicitly place them at the bottom of your <body>.
+     */
+    public function renderScripts(): string
+    {
+        $scripts = "";
+        foreach ($this->getAssetUrls() as $url) {
+            $scripts .= "<script src=\"{$url}\"></script>\n";
+        }
 
-        /**
-         * @var InputfieldCheckboxes $checkboxes
-         */
-        $checkboxes = $modules->get('InputfieldCheckboxes');
-        $checkboxes->attr('name', 'extensions');
-        $checkboxes->attr('value', $this->extensions);
-        $checkboxes->label = $this->_('Extensions');
-        $checkboxes->description = $this->_('Htmx provides an extension mechanism for defining and using extensions within htmx-based applications.');
-        $checkboxes->addOption('ajax-header', $this->_('[Ajax Header](https://htmx.org/extensions/ajax-header/)'));
-        $checkboxes->addOption('alpine-morph', $this->_('[Alpine Morph](https://htmx.org/extensions/alpine-morph/)'));
-        $checkboxes->addOption('class-tools', $this->_('[Class Tools](https://htmx.org/extensions/class-tools/)'));
-        $checkboxes->addOption('client-side-templates', $this->_('[Client Side Templates](https://htmx.org/extensions/client-side-templates/)'));
-        // $checkboxes->addOption('debug', $this->_('[Debug](https://htmx.org/extensions/debug/)'));
-        $checkboxes->addOption('event-header', $this->_('[Event Header](https://htmx.org/extensions/event-header/)'));
-        $checkboxes->addOption('head-support', $this->_('[Head Support](https://htmx.org/extensions/head-support/)'));
-        $checkboxes->addOption('include-vals', $this->_('[Include Values](https://htmx.org/extensions/include-vals/)'));
-        $checkboxes->addOption('json-enc', $this->_('[JSON Encoding](https://htmx.org/extensions/json-enc/)'));
-        // $checkboxes->addOption('idiomorph', $this->_('[Idiomorph](https://github.com/bigskysoftware/idiomorph)'));
-        $checkboxes->addOption('loading-states', $this->_('[Loading States](https://htmx.org/extensions/loading-states/)'));
-        $checkboxes->addOption('method-override', $this->_('[Method Override](https://htmx.org/extensions/method-override/)'));
-        $checkboxes->addOption('morphdom-swap', $this->_('[Morphdom Swap](https://htmx.org/extensions/morphdom-swap/)'));
-        $checkboxes->addOption('multi-swap', $this->_('[Multi Swap](https://htmx.org/extensions/multi-swap/)'));
-        $checkboxes->addOption('path-deps', $this->_('[Path Dependencies](https://htmx.org/extensions/path-deps/)'));
-        $checkboxes->addOption('preload', $this->_('[Preload](https://htmx.org/extensions/preload/)'));
-        $checkboxes->addOption('remove-me', $this->_('[Remove Me](https://htmx.org/extensions/remove-me/)'));
-        $checkboxes->addOption('response-targets', $this->_('[Response Targets](https://htmx.org/extensions/response-targets/)'));
-        $checkboxes->addOption('restored', $this->_('[Restored](https://htmx.org/extensions/restored/)'));
-        $checkboxes->addOption('sse', $this->_('[Server Side Events](https://htmx.org/extensions/server-sent-events/)'));
-        $checkboxes->addOption('we', $this->_('[Web Sockets](https://htmx.org/extensions/web-sockets/)'));
+        $csrfName = $this->wire('session')->CSRF->getTokenName();
+        $csrfValue = $this->wire('session')->CSRF->getTokenValue();
+        $scripts .= <<<HTML
+<script>
+document.addEventListener('htmx:configRequest', function(evt) {
+    if (evt.detail.verb !== "get") {
+        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
+        evt.detail.headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+});
+</script>
+HTML;
 
-        $inputfields->add($checkboxes);
+        // Prevent Page::render hook from double-injecting if the developer manually echoes it
+        $this->loadFrontendAssets = false;
 
-        /**
-         * @var InputfieldCheckboxes $checkboxes
-         */
-        $checkboxes = $modules->get('InputfieldCheckboxes');
-        $checkboxes->attr('name', 'templateEngines');
-        $checkboxes->attr('value', $this->templateEngines);
-        $checkboxes->showIf = 'extensions=client-side-templates';
-        $checkboxes->label = $this->_('Client Side Template Extension');
-        $checkboxes->description = $this->_('This extension supports transforming a JSON/XML request response into HTML via a client-side template before it is swapped into the DOM.');
-        
-        $checkboxes->addOption('mustache', $this->_('[mustache.js](http://github.com/janl/mustache.js) is a zero-dependency implementation of the [mustache](http://mustache.github.io/) template system in JavaScript.'));
-        $checkboxes->addOption('nunjucks', $this->_('[Nunjucks](https://mozilla.github.io/nunjucks/) a rich and powerful templating language for JavaScript.'));
-        $checkboxes->addOption('handlebars', $this->_('[Handlebars](https://handlebarsjs.com) Minimal templating on steroids'));
-        
-        $inputfields->add($checkboxes);
-        
+        return $scripts;
+    }
+
+    /**
+     * Helper to load the current HTMX JS resources
+     */
+    protected function getAssetUrls(): array
+    {
+        /** @var Config $config */
+        $config = $this->wire('config');
+        $minified = $config->debug ? '.js' : '.min.js'; // Fallback to minified in prod
+
+        $urls = [];
+
+        // Base HTMX library (local)
+        // We handle debug vs prod version mapping by checking what's on disk.
+        $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
+        $urls[] = $baseUrl . "htmx" . $minified;
+
+        if (hxInAdmin() || $this->loadHyperscript) {
+            $urls[] = $baseUrl . "hyperscript" . $minified;
+        }
+
+        // Load extensions if requested (ws, sse, etc.)
+        foreach ($this->extensions as $ext) {
+            // Ext files might only exist as .js
+            $urls[] = $baseUrl . "ext/{$ext}.js";
+        }
+
+        return $urls;
+    }
+
+    /**
+     * Configuration options
+     */
+    public function getModuleConfigInputfields(InputfieldWrapper $inputfields)
+    {
+        $modules = $this->wire('modules');
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'loadFrontendAssets');
+        $f->label = $this->_('Load Frontend Assets');
+        $f->description = $this->_('Check to inject HTMX scripts into `<head>` dynamically on frontend pages.');
+        $f->checked = (bool)$this->loadFrontendAssets;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'loadHyperscript');
+        $f->label = $this->_('Load _hyperscript');
+        $f->description = $this->_('Check to inject the `_hyperscript` library alongside HTMX on frontend pages (Always active in Admin).');
+        $f->checked = (bool)$this->loadHyperscript;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'autoFlashMessages');
+        $f->label = $this->_('Auto Flash Messages to HTMX');
+        $f->description = $this->_('When enabled, `$session->message()` and `$session->error()` will be automatically transformed into an HX-Trigger-After-Swap event (`pw-messages`) on HTMX requests.');
+        $f->checked = (bool)$this->autoFlashMessages;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'autoExtractTargets');
+        $f->label = $this->_('Auto Target Extraction (Partial Rendering)');
+        $f->description = $this->_('When enabled, the module will try to auto-extract the HTML matching `HX-Target` from the final full page render if it is a standard HTMX request. (Uses DOMDocument, can be intensive).');
+        $f->checked = (bool)$this->autoExtractTargets;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckboxes');
+        $f->attr('name', 'extensions');
+        $f->label = $this->_('Enable HTMX Extensions');
+        $f->description = $this->_('Check which supported HTMX extensions you want injected locally.');
+        $f->addOption('ws', $this->_('WebSockets (ws.js) - Bi-directional communication.'));
+        $f->addOption('sse', $this->_('Server-Sent Events (sse.js) - Uni-directional server streams.'));
+        $f->addOption('head-support', $this->_('Head Support (head-support.js) - Merge head tags during swaps.'));
+        $f->addOption('preload', $this->_('Preload (preload.js) - Background preloading of links.'));
+        $f->addOption('response-targets', $this->_('Response Targets (response-targets.js) - Different targets based on HTTP status.'));
+        $f->attr('value', $this->extensions);
+        $inputfields->add($f);
+
         return $inputfields;
     }
+}
+
+/**
+ * Procedural helpers equivalent to previous version's utility file
+ */
+function hxInAdmin(): bool
+{
+    $page = wire('page');
+    return $page && $page->template && $page->template->name == 'admin';
 }

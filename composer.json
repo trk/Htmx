@@ -1,34 +1,29 @@
 {
-  "name": "trk/htmx",
-  "description": "htmx gives you access to AJAX, CSS Transitions, WebSockets and Server Sent Events directly in HTML, using attributes, so you can build modern user interfaces with the simplicity and power of hypertext.",
+  "name": "trk/processwire-htmx",
+  "description": "State-Aware HTMX 2.x Module offering an elegant Request/Response API natively for ProcessWire.",
   "type": "pw-module",
   "keywords": [
-    "altivebir",
-    "wire",
-    "htmx"
+    "processwire",
+    "htmx",
+    "state",
+    "component"
   ],
   "homepage": "https://github.com/trk/Htmx",
   "license": "MIT",
   "authors": [
     {
       "name": "Iskender TOTOGLU",
-      "email": "iskender@altivebir.com",
-      "homepage": "https://altivebir.com/"
+      "email": "iskender@totoglu.com",
+      "homepage": "https://totoglu.com/"
     }
   ],
   "autoload": {
     "psr-4": {
-      "Altivebir\\Htmx\\": [
-        "src"
-      ]
-    },
-    "files": [
-      "src/functions.php",
-      "FunctionsAPI.php"
-    ]
+      "Totoglu\\ProcessWire\\Htmx\\": "src/"
+    }
   },
   "require": {
-      "php": ">=8.1"
+    "php": ">=8.1"
   },
   "config": {
     "process-timeout": 0,
