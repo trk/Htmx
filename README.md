@@ -186,7 +186,7 @@ echo $htmx->use('class-tools')->renderScripts();
 
 ## Advanced Settings & Integrations
 
-### 6. Auto-Flash Messages (Oto-Bildirimler)
+### 6. Auto-Flash Messages
 
 By default, HTMX triggers ProcessWire's `$session->message()` or `$session->error()` dynamically using HX-Trigger-After-Swap when requests overlap.
 
