@@ -147,6 +147,9 @@ $cmp->executeAction('hx__action');
 </div>
 ```
 
+**Optional Frontend Rendering Lifecycle:**
+State-aware components also support similar frontend hooks to the `Ui` architecture! By implementing `renderReady()`, `beforeRender()`, `render()`, and `afterRender(&$html)` natively in your `Component` class, you can echo the object directly (`echo $cmp;`). It will securely evaluate its lifecycle, ensuring state payloads and logic are neatly encapsulated directly within its `render()` output.
+
 ### 4. Out-Of-Band (OOB) Swaps & Hyperscript (`$htmx->fragment`)
 
 Queue up Out-of-Band swaps. This lets you update elements in completely separate areas of the DOM alongside your main HTMX response! The module avoids wrapping your string in `<div>` tags if it detects your root nodes natively match the incoming ID!

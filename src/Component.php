@@ -260,4 +260,54 @@ abstract class Component extends WireData
             }
         }
     }
+
+    /**
+     * Determines if the component is ready to be rendered.
+     */
+    public function renderReady(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Lifecycle hook executed just before render().
+     */
+    protected function beforeRender(): void
+    {
+    }
+
+    /**
+     * Core render method to implement in child classes.
+     */
+    public function render(): string
+    {
+        return '';
+    }
+
+    /**
+     * Lifecycle hook executed immediately after render().
+     */
+    protected function afterRender(string &$html): void
+    {
+    }
+
+    /**
+     * Magic string casting safely evaluates the render lifecycle.
+     */
+    public function __toString(): string
+    {
+        try {
+            if (!$this->renderReady()) {
+                return '';
+            }
+
+            $this->beforeRender();
+            $html = $this->render();
+            $this->afterRender($html);
+
+            return $html;
+        } catch (\Throwable $e) {
+            return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+        }
+    }
 }
