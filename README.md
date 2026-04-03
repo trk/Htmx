@@ -187,7 +187,7 @@ class MyModal extends Ui {
 ```
 
 **Key Features of the `Ui` Architecture:**
-- **DOM Tree Management:** Components can act as wrappers via `$modal->addChild($btn)`. Use `$this->children` to render nested UI components exactly like DOM nodes.
+- **DOM Tree Management:** Components can act as wrappers via `$modal->addChild($btn)`. Seamlessly render all injected children using `$this->renderChildren()` or render a specific child directly using `$this->renderChild('my-component')` (supports internal parameter querying!).
 - **Tree Context & Traversing:** Inside deeply nested children, use `$btn->findParent('my-modal')` to find a specific parent container. You can also search explicitly by parameter: `$btn->findParent(null, 'data-role', 'admin')`.
 - **Downwards Traversal:** Use `$form->findChild('submit-btn')` to recursively search for and grab a nested child component by its `$name`. Can also search by parameter: `$form->findChild('input', 'name', 'email')`.
 - **Sensible Syntactic Sugar:** 
@@ -196,6 +196,7 @@ class MyModal extends Ui {
   - `hyperscript('on click toggle .open')` and its alias `_('...')` handle hyperscript bindings safely.
   - **Auto JSON encoding:** If you pass an array to any of the above helpers (or directly in constructor `attributes`), it is automatically safely converted to a JSON string. e.g. `$btn->hx('vals', ['id' => 5])` → `hx-vals='{"id":5}'`.
   - `addClass('uk-button')` and `setAttribute('disabled', 'disabled')` manage HTML attributes fluently via the embedded `AttributeBag`.
+  - **XSS Protection:** Use the `$this->esc('malicious string')` helper inside your string renders to safely execute `htmlspecialchars` natively.
 - **Intelligent Identity (`getId()`):** Call `$btn->getId()` to fetch the component's unique ID. If it doesn't have one, it dynamically and securely registers a unique deterministic ID upon calling.
 - **Lifecycle Hooks:** Utilize `beforeRender()` or `afterRender(&$html)` to dynamically inject CSS/JS or modify the final HTML payload immediately around the render cycle.
 - **Strict Rendering:** Override `renderReady()` to validate prerequisites. If false, the component safely self-destructs and renders an empty string `''` without throwing structural errors.
