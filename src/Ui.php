@@ -320,11 +320,12 @@ abstract class Ui
             $this->beforeRender();
             $html = $this->render();
             $this->afterRender($html);
-
             return $html;
         } catch (\Throwable $e) {
-            // __toString cannot throw exceptions in old PHP, but we convert to string
-            return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+            if (\ProcessWire\wire('config')->debug) {
+                return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>{$e->getMessage()}</p></div>";
+            }
+            return '';
         }
     }
 }
