@@ -15,6 +15,7 @@ class AttributeBag extends ParameterBag
      */
     public function __construct(array $parameters = [])
     {
+        parent::__construct();
         foreach ($parameters as $key => $value) {
             // Automatically convert arrays to JSON at initialization phase
             $isJson = is_array($value) || is_object($value);
