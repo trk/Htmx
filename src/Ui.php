@@ -65,6 +65,14 @@ abstract class Ui
     }
 
     /**
+     * Helper to safely escape strings for HTML output.
+     */
+    protected function esc(mixed $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
+
+    /**
      * Set a parameter and return self for chaining.
      */
     public function setParam(string $key, mixed $value): self
@@ -223,6 +231,27 @@ abstract class Ui
     public function getChildren(): array
     {
         return $this->children;
+    }
+
+    /**
+     * Recursively finds and renders a specific child component.
+     */
+    public function renderChild(?string $name, ?string $paramKey = null, mixed $paramValue = null): string
+    {
+        $child = $this->findChild($name, $paramKey, $paramValue);
+        return $child ? (string)$child : '';
+    }
+
+    /**
+     * Renders all currently registered children sequentially.
+     */
+    public function renderChildren(): string
+    {
+        $html = '';
+        foreach ($this->children as $child) {
+            $html .= (string)$child;
+        }
+        return $html;
     }
 
     /**
