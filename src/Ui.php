@@ -1,17 +1,17 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx\UI;
+namespace Totoglu\ProcessWire\Htmx;
 
 use Totoglu\ProcessWire\Htmx\Bag\ParameterBag;
 use Totoglu\ProcessWire\Htmx\Bag\AttributeBag;
 
 /**
- * UIComponent
+ * Ui
  * 
  * Base class for all visual HTML components. Provides easy manipulation of ParameterBag 
  * and AttributeBag to render clean, safe HTML without string concatenation mess.
  */
-abstract class UIComponent
+abstract class Ui
 {
     public ParameterBag $parameters;
     public AttributeBag $attributes;
