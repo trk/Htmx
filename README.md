@@ -162,7 +162,42 @@ $htmx->fragment->addOobSwap(
 $htmx->fragment->addHyperscript('add .fade-in to #notification-bar');
 ```
 
-### 5. Dynamic Assets Loading
+### 5. Object-Oriented UI Components (`Ui` Base Class)
+
+This module provides a powerful `Ui` base class built as a DOM-like tree architecture. It eliminates spaghetti string concatenation and standardizes HTML component rendering with React/Vue-level programmatic control.
+
+```php
+use Totoglu\ProcessWire\Htmx\Ui;
+
+class MyModal extends Ui {
+    // 1. Component Identity
+    public string $name = 'my-modal';
+    
+    // 2. Smart Defaults
+    public array $defaultParams = [
+        'title' => 'Default Title'
+    ];
+    
+    public function render(): string {
+        $title = $this->param('title');
+        $content = $this->children; // Iterate $this->children or let parent component handle it
+        return "<div {$this->attributes->render()}><h1>{$title}</h1></div>";
+    }
+}
+```
+
+**Key Features of the `Ui` Architecture:**
+- **DOM Tree Management:** Components can act as wrappers via `$modal->addChild($btn)`. Use `$this->children` to render nested UI components exactly like DOM nodes.
+- **Tree Context & Traversing:** Inside deeply nested children, use `$btn->findParent('my-modal')` to find a specific parent container. You can also search explicitly by parameter: `$btn->findParent(null, 'data-role', 'admin')`.
+- **Downwards Traversal:** Use `$form->findChild('submit-btn')` to recursively search for and grab a nested child component by its `$name`. Can also search by parameter: `$form->findChild('input', 'name', 'email')`.
+- **Sensible Syntactic Sugar:** 
+  - `data('id', 5)` compiles to `data-id="5"`
+  - `hx('post', '/url')` or `htmx('target', '#box')` compiles to `hx-post="/url"` and `hx-target="#box"`.
+  - `addClass('uk-button')` and `setAttribute('disabled', 'disabled')` manage HTML attributes fluently via the embedded `AttributeBag`.
+- **Lifecycle Hooks:** Utilize `beforeRender()` or `afterRender(&$html)` to dynamically inject CSS/JS or modify the final HTML payload immediately around the render cycle.
+- **Strict Rendering:** Override `renderReady()` to validate prerequisites. If false, the component safely self-destructs and renders an empty string `''` without throwing structural errors.
+
+### 6. Dynamic Assets Loading
 
 Instead of enabling extensions globally via the module's config, you can dynamically load extensions (or `_hyperscript`) on-the-fly inside specific templates or modules.
 
@@ -192,7 +227,7 @@ echo $htmx->use('class-tools')->renderScripts();
 
 ## Advanced Settings & Integrations
 
-### 6. Auto-Flash Messages
+### 7. Auto-Flash Messages
 
 By default, HTMX triggers ProcessWire's `$session->message()` or `$session->error()` dynamically using HX-Trigger-After-Swap when requests overlap.
 
@@ -203,7 +238,7 @@ You can catch these on the frontend easily (e.g., using `_hyperscript`):
 <body _="on pw-messages(text, type) call showToast(text, type)">
 ```
 
-### 7. Auto Target Extraction (Partial Rendering)
+### 8. Auto Target Extraction (Partial Rendering)
 
 If **"Auto Target Extraction"** is enabled, the module attempts to extract just the target HTML matching the inbound `HX-Target` ID from the final `$page->render()` output using `DOMDocument`. This lets developers return full HTML strings natively from templates, while the module transparently strips out the Layout and only returns the piece HTMX requested!
 
