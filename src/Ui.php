@@ -39,6 +39,19 @@ abstract class Ui
     }
 
     /**
+     * Get the element's ID. 
+     * If it doesn't have one, dynamically generate and assign a unique ID.
+     */
+    public function getId(): string
+    {
+        if (!$this->attributes->has('id')) {
+            $uniquePath = substr(md5(uniqid('', true)), 0, 6);
+            $this->attributes->set('id', "{$this->name}-{$uniquePath}");
+        }
+        return $this->attributes->get('id');
+    }
+
+    /**
      * Get or set a parameter fluently.
      */
     public function param(string $key, mixed $value = null): mixed
@@ -61,11 +74,11 @@ abstract class Ui
     }
 
     /**
-     * Set an HTML attribute and return self for chaining.
+     * Set a custom HTML attribute dynamically.
      */
-    public function setAttribute(string $key, mixed $value): self
+    public function setAttribute(string $key, mixed $value, bool $asJson = false): self
     {
-        $this->attributes->set($key, $value);
+        $this->attributes->set($key, $value, $asJson);
         return $this;
     }
 
@@ -88,27 +101,46 @@ abstract class Ui
     }
 
     /**
-     * Syntactic sugar for setting data-* attributes.
+     * Helper to set custom data-* attributes.
      */
-    public function data(string $key, mixed $value): self
+    public function data(string $key, mixed $value, bool $asJson = false): self
     {
-        return $this->setAttribute("data-{$key}", $value);
+        return $this->setAttribute("data-{$key}", $value, $asJson);
     }
 
     /**
-     * Syntactic sugar for setting hx-* attributes.
+     * Helper to set a raw htmx-* attribute dynamically.
      */
-    public function hx(string $key, mixed $value): self
+    public function htmx(string $key, mixed $value, bool $asJson = false): self
     {
-        return $this->setAttribute("hx-{$key}", $value);
+        return $this->setAttribute("htmx-{$key}", $value, $asJson);
     }
 
     /**
-     * Alias for hx().
+     * Helper to set a raw hx-* attribute dynamically.
      */
-    public function htmx(string $key, mixed $value): self
+    public function hx(string $key, mixed $value, bool $asJson = false): self
     {
-        return $this->hx($key, $value);
+        return $this->setAttribute("hx-{$key}", $value, $asJson);
+    }
+    
+    /**
+     * Syntactic sugar for setting Hyperscript.
+     * Cleans up newlines and extra spaces automatically.
+     */
+    public function hyperscript(string $script): self
+    {
+        // Clean up multiline hyperscript strings for cleaner output
+        $cleanScript = preg_replace('/\s+/', ' ', trim($script));
+        return $this->setAttribute('_', $cleanScript);
+    }
+    
+    /**
+     * Short alias for hyperscript().
+     */
+    public function _(string $script): self
+    {
+        return $this->hyperscript($script);
     }
 
     /**

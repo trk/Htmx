@@ -11,6 +11,18 @@ namespace Totoglu\ProcessWire\Htmx\Bag;
 class AttributeBag extends ParameterBag
 {
     /**
+     * Re-implement constructor to utilize the set method for proper JSON conversion when arrays are provided.
+     */
+    public function __construct(array $parameters = [])
+    {
+        foreach ($parameters as $key => $value) {
+            // Automatically convert arrays to JSON at initialization phase
+            $isJson = is_array($value) || is_object($value);
+            $this->set($key, $value, $isJson);
+        }
+    }
+
+    /**
      * Add a class or an array of classes to the "class" attribute.
      */
     public function addClass(string|array $class): void
@@ -22,9 +34,6 @@ class AttributeBag extends ParameterBag
         $this->set('class', implode(' ', $merged));
     }
 
-    /**
-     * Remove a class or an array of classes from the "class" attribute.
-     */
     public function removeClass(string|array $class): void
     {
         $currentClasses = $this->getClasses();
@@ -37,6 +46,17 @@ class AttributeBag extends ParameterBag
         } else {
             $this->set('class', implode(' ', $filtered));
         }
+    }
+
+    /**
+     * Override set to support automated JSON conversion
+     */
+    public function set(string $key, mixed $value, bool $asJson = false): void
+    {
+        if ($asJson && (is_array($value) || is_object($value))) {
+            $value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        parent::set($key, $value);
     }
 
     /**
