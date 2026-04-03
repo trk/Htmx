@@ -149,16 +149,21 @@ HTML;
 
             // 4. Auto Flash Messages to HX-Trigger-After-Swap
             if ($this->autoFlashMessages && $this->request->isHtmx()) {
-                $messages = $this->wire('session')->getMessages(true);
-                $errors = $this->wire('session')->getErrors(true);
-
                 $flash = [];
-                if ($messages) {
-                    foreach ($messages as $m) $flash[] = ['type' => 'message', 'text' => $m instanceof Notice ? $m->text : (string)$m];
-                }
-                if ($errors) {
-                    foreach ($errors as $eMsg) $flash[] = ['type' => 'error', 'text' => $eMsg instanceof Notice ? $eMsg->text : (string)$eMsg];
-                }
+                try {
+                    $notices = $this->wire('notices');
+                    if ($notices && is_iterable($notices)) {
+                        foreach ($notices as $n) {
+                            $type = 'message';
+                            if (strpos(get_class($n), 'Error') !== false) $type = 'error';
+                            elseif (strpos(get_class($n), 'Warning') !== false) $type = 'warning';
+                            $flash[] = ['type' => $type, 'text' => $n->text];
+                        }
+                        if (method_exists($notices, 'removeAll')) {
+                            $notices->removeAll();
+                        }
+                    }
+                } catch (\Throwable $e) {}
 
                 if (!empty($flash)) {
                     $this->response->triggerAfterSwap('pw-messages', $flash);
