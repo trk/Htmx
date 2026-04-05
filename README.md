@@ -144,9 +144,19 @@ echo $htmx->renderComponent(LikeButton::class, [
 ```
 
 **Option B: Using a Raw HTML String (e.g. A Click Counter)**
-Imagine a simple `ClickCounter` component class holding a `$count` property and an `increment` method. You don't even need an external view file:
+You don't even need an external view file! Define a simple class with an `increment` action:
 
 ```php
+use Totoglu\Htmx\Component;
+
+class ClickCounter extends Component {
+    public int $count = 0;
+    
+    public function increment(): void {
+        $this->count++;
+    }
+}
+
 // Renders the component immediately using a raw string view
 echo $htmx->renderComponent(ClickCounter::class, ['count' => 0], "
     <div id='counter-{{id}}' hx-post='./' hx-target='this'>
