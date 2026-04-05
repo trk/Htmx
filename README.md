@@ -1,15 +1,27 @@
 # ProcessWire HTMX Module
 
-A production-ready HTMX module for ProcessWire. This module seamlessly brings the power of state-aware components, out-of-band swaps, WebSockets, Server-Sent Events (SSE), and the `_hyperscript` library directly to your ProcessWire templates with a clean, object-oriented API.
+![ProcessWire](https://img.shields.io/badge/ProcessWire-3.x-orange.svg)
+![HTMX](https://img.shields.io/badge/HTMX-2.x-blue.svg)
+![Status](https://img.shields.io/badge/Status-Production%20Ready-success.svg)
+![Security](https://img.shields.io/badge/Security-HMAC--SHA256-critical.svg)
 
-## Features
+A powerful HTMX integration module designed specifically for ProcessWire. It bridges the gap between client-side reactivity and server-side authority, enabling you to build SPA-like interactions without abandoning traditional PHP rendering. 
 
-- **Natively Bundled:** Includes HTMX 2.x, WebSockets (`ws.js`), SSE (`sse.js`), `response-targets.js`, `preload.js`, `head-support.js`, and `_hyperscript` out of the box with zero external dependencies.
-- **Fluent Request/Response API:** Easily manage `HX-*` headers, retargeting, and triggers from your backend.
-- **State-Aware Components:** Build component classes that automatically hydrate/dehydrate their state between client and server requests.
-- **OOB Fragment Engine:** Render multiple pieces of UI simultaneously across different DOM nodes without complex full-page re-renders.
+By unifying **State-Aware Components**, **HMAC-SHA256 Payload Security**, and ProcessWire's native architecture, this module provides the ultimate Developer Experience (DX) inspired by frameworks like Livewire—exclusively for ProcessWire.
 
-## Installation
+---
+
+## 🏗 Executive Overview
+
+- **Natively Bundled:** Supplies HTMX 2.x, WebSockets (`ws.js`), Server-Sent Events (`sse.js`), along with key extensions and `_hyperscript`, completely zero-dependency.
+- **State-Aware Component Architecture:** Seamless data hydration and dehydration between requests. 
+- **Object Synthesis:** Magically serialize full ProcessWire objects (like `Page`) down to lightweight secure IDs, restoring them effortlessly on the next request.
+- **Cryptographic Security:** End-to-end state manipulation protection with built-in HMAC-SHA256 signatures and TTL-based Replay Protection.
+- **Fluent Request/Response API:** Intercept, retarget, flash messages, and trigger custom JS events directly from ProcessWire controllers.
+
+---
+
+## ⚙️ Installation
 
 **Via Composer (Recommended):**
 ```bash
@@ -17,240 +29,231 @@ composer require trk/processwire-htmx
 ```
 
 **Via Manual Download:**
-1. Clone or copy this directory into `site/modules/Htmx/`.
-2. In the ProcessWire Admin, go to **Modules > Refresh**.
+1. Clone or extract into `site/modules/Htmx/`.
+2. In the ProcessWire Admin, log in and navigate to **Modules > Refresh**.
 3. Install **HTMX**.
 
-## Configuration
+---
 
-In the module settings page under **Modules > Configure > Htmx**, you can toggle features at will:
+## 🧠 Core Architecture: Component Lifecycle
 
-- **Load Frontend Assets:** Automatically injects HTMX scripts dynamically at the end of the `<head>` tag on frontend pages.
-- **Admin Usage:** HTMX seamlessly automatically bounds itself across all ProcessWire Admin pages by default.
-- **Load \_hyperscript:** Bundles the companion `_hyperscript` library for lightweight native client-side interactivity.
-- **Enable HTMX Extensions:** Options to bundle the extracted extensions natively: `ws` (WebSockets), `sse` (Server-Sent Events), `head-support`, `preload`, and `response-targets`.
+The true power of this module lies in the `Component` class. It shifts PHP from a "fire-and-forget" mentality to a persistent, stateful application logic container.
 
-## API Documentation
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Htmx as HTMX Module
+    participant Component as Component Instance
+    participant DB as ProcessWire API
 
-Retrieve the master control instance using ProcessWire API variables: `$htmx = wire('htmx');`.
+    Browser->>Htmx: Initial Page Load (GET)
+    Htmx->>Component: mount() & fill()
+    Component->>Browser: Render UI + Encrypted __state Payload
 
-### 1. Handling Requests (`$htmx->request`)
-
-The request object provides explicit methods to test HTMX-specific headers sent by the client. For convenience, you can also quickly check if the current request is an HTMX request using `$config->htmx` (similar to ProcessWire's native `$config->ajax`).
-
-```php
-$htmx = wire('htmx');
-$config = wire('config');
-
-// Quick check using ProcessWire's native config variable
-if ($config->htmx) {
-    // This is an HTMX request!
-}
-
-// Or deeply inspect via the request API
-if ($htmx->request->isHtmx()) {
-    $isBoosted = $htmx->request->isBoosted();    // bool
-    $targetId  = $htmx->request->target();       // string|null (e.g. 'main-content-div')
-    $trigger   = $htmx->request->triggerName();  // string|null (e.g. 'save-button')
-    $url       = $htmx->request->currentUrl();   // string|null
-    $prompt    = $htmx->request->prompt();       // string|null
+    Note over Browser, Component: User interacts (e.g. Clicks Button)
     
-    // Validate ProcessWire CSRF Tokens with one line:
-    $htmx->request->validateCsrf(throwException: true);
-}
+    Browser->>Htmx: HX-Request (POST) + __state
+    Htmx->>Component: hydrate(__state)
+    Component->>DB: Object Synthesis (Fetch Pages by ID)
+    Htmx->>Component: executeAction('like')
+    Component->>Browser: Re-render UI + New Encrypted __state
 ```
 
-### 2. Formulating Responses (`$htmx->response`)
+---
 
-No more manual `header()` manipulation. Inject response headers back to the browser seamlessly using the fluent API.
+## 🚀 Quick Start: Building a Stateful Component
 
-```php
-// 1. Modifying HTMX Browser Location
-$htmx->response->redirect('/login/');
-$htmx->response->refresh();
-$htmx->response->pushUrl('/new-path/'); // Pass false to prevent history updates
-$htmx->response->replaceUrl('/replaced/');
-$htmx->response->location(['path' => '/login', 'target' => '#main']); // Array JSON support
+Let's build a Livewire-style "Like" button that remembers its state, seamlessly tied to a specific ProcessWire Page.
 
-// 1.5 Validation Errors (HTTP 422) with optional retarget
-$htmx->response->validationError('#form-errors');
-
-// 2. Triggering Client-Side Events
-$htmx->response
-    ->trigger('itemAdded', ['count' => 5])
-    ->triggerAfterSettle('clearForm')
-    ->triggerAfterSwap('initThirdPartyPlugin');
-
-// 3. Modifying the Response Destination dynamically
-$htmx->response->retarget('#error-container')->reswap('innerHTML');
-
-// 4. Force stop loops (Returns HTTP 286 internally)
-$htmx->response->stopPolling();
-```
-
-### 3. State-Aware Components (`Component`)
-
-Build dynamic UI widgets that survive across multiple HTMX requests. 
-
-The module automatically **Hydrates & Dehydrates** your public PHP properties utilizing `ReflectionClass`, validates security via **HMAC-SHA256 signing**, enforces **TTL Replay Protection** (expires after 24 hours by default).
-
-**ProcessWire Object Synthesis (Livewire-Style Models):** If you define a public property as a `\ProcessWire\Page` or `\ProcessWire\PageArray`, the module will magically shrink the object into a simple ID metadata array (`__wire_model: 'Page'`) for the encrypted HTML payload, and then re-hydrate the full original ProcessWire object automatically from the database on the next request!
-
-**Step 1: Create a Component:**
+### 1. Create Your Component (`LikeButton.php`)
 
 ```php
 namespace ProcessWire;
 
-use Totoglu\ProcessWire\Htmx\Component;
+use Totoglu\Htmx\Component;
 
-class HeartComponent extends Component {
-    // Magic: Public properties are auto-hydrated/dehydrated!
-    // Magic: Object Synthesis fully dehydrates/hydrates ProcessWire Pages natively!
-    public Page $post;
+class LikeButton extends Component {
     
-    public int $hearts = 0;
+    // ProcessWire Objects are automatically synthesized!
+    public Page $post; 
 
-    // Action method automatically executed by the Action Dispatcher
-    // Features: Auto-mapped variables, strict type-casting, & Dependency Injection!
+    // Public properties are securely preserved across requests
+    public int $likes = 0;
+
+    /**
+     * Optional: Hook executed upon initialization
+     */
+    public function mount() {
+        if ($this->likes === 0) {
+            $this->likes = $this->post->num_likes ?? 0;
+        }
+    }
+
+    /**
+     * Action triggered from the frontend.
+     * Dependencies (like $session) are Auto-Injected!
+     */
     public function like(int $step = 1, Session $session) {
-        $this->hearts += $step;
+        $this->likes += $step;
+        
+        // Let's also save to the DB...
+        $this->post->of(false);
+        $this->post->num_likes = $this->likes;
+        $this->post->save('num_likes');
+        
         $session->message("You liked {$this->post->title}!");
     }
 }
 ```
 
-**Step 2: Inside your Template (`heart.php`):**
+### 2. The Component View (`components/like-button.php`)
+
+Build the markup. You have full access to `$this` (the component context).
 
 ```php
-<?php
-$cmp = new \ProcessWire\HeartComponent();
-$cmp->post = $page; // The current ProcessWire Page
+<div id="<?= $this->id ?>" hx-post="./" hx-target="this">
+    <h3><?= $this->post->title; ?></h3>
+    <p>Total Likes: <?= $this->likes; ?></p>
 
-// Restore State (verifies HMAC and TTL Replay Protection and fetches Objects from DB)
-$cmp->hydrate(ttlHours: 24); 
+    <!-- Secure State Payload (Required to maintain state) -->
+    <?= $this->renderStatePayload(); ?>
 
-// Automatically routes HTMX incoming actions (hx__action="like") to public methods!
-// Parameters are automatically TYPE-CASTED based on method signature, 
-// and ProcessWire API objects ($session) are Auto-Injected via DI!
-$cmp->executeAction('hx__action'); 
-?>
-
-<div id="heart-container" hx-post="/heart-url" hx-target="#heart-container">
-    <p>Post: <?= $cmp->post->title; ?></p>
-    <p>Hearts: <?= $cmp->hearts; ?></p>
-
-    <!-- The Secure State Payload -->
-    <?= $cmp->renderStatePayload(ttlHours: 24); ?>
-
-    <!-- Action definition -> corresponds to the class method "like" and parameter "step" -->
-    <button class="btn" type="submit" name="hx__action" value="like">Like +1</button>
+    <!-- Action Trigger (hx__action routes to the "like" method) -->
+    <button class="uk-button" type="submit" name="hx__action" value="like">
+        Like +1
+    </button>
 </div>
 ```
 
-**Optional Frontend Rendering Lifecycle:**
-State-aware components also support similar frontend hooks to the `Ui` architecture! By implementing `renderReady()`, `beforeRender()`, `render()`, and `afterRender(&$html)` natively in your `Component` class, you can echo the object directly (`echo $cmp;`). It will securely evaluate its lifecycle, ensuring state payloads and logic are neatly encapsulated directly within its `render()` output.
+### 3. Rendering The Component (`_main.php` or controller)
 
-### 4. Out-Of-Band (OOB) Swaps & Hyperscript (`$htmx->fragment`)
-
-Queue up Out-of-Band swaps. This lets you update elements in completely separate areas of the DOM alongside your main HTMX response! The module avoids wrapping your string in `<div>` tags if it detects your root nodes natively match the incoming ID!
+Use the robust **`renderComponent()` DX Helper** anywhere in your application. The module will handle initialization, hydration, action execution, and rendering dynamically.
 
 ```php
-// E.g. Update a navigation counter out-of-band!
-$htmx->fragment->addOobSwap(
-    selector: '#navigation-cart-count', 
-    html: '<span id="navigation-cart-count">3 items</span>'
-);
+$htmx = wire('htmx');
 
-// E.g. Trigger hyperscript evaluation dynamically when the HTMX response lands on the client
-$htmx->fragment->addHyperscript('add .fade-in to #notification-bar');
+// One-line rendering! Pass the class and array of initial properties.
+echo $htmx->renderComponent(LikeButton::class, [
+    'post' => $page,
+    'likes' => 0
+], 'components/like-button.php'); 
+// Assuming external template rendering. Alternatively, render() could be in the class.
 ```
 
-### 5. Object-Oriented UI Components (`Ui` Base Class)
+*(Note: If your class implements the `render()` method, the 3rd parameter is not needed).*
 
-This module provides a powerful `Ui` base class built as a DOM-like tree architecture. It eliminates spaghetti string concatenation and standardizes HTML component rendering with React/Vue-level programmatic control.
+---
+
+## 🔒 Security & Data Integrity
+
+Working with state on the client side requires strict validation to prevent tampering.
+
+1. **Instance Isolation:** Every component is dynamically assigned a unique internal `__id`. Two instances of the same component on the same page will never collide or mix state.
+2. **Cryptographic Signatures:** The HTML payload outputted by `$this->renderStatePayload()` is HMAC-SHA256 signed using the ProcessWire `$config->userAuthSalt` configuration. Any manual tampering of the hidden input in the browser will result in immediate rejection.
+3. **Replay Protection (TTL):** State payloads have an expiration time (default 24 hours). You can customize this by passing `$this->renderStatePayload(ttlHours: 2)`.
+
+---
+
+## ⚡ Fluent Request / Response Flow
+
+HTMX operates heavily on headers to control browser actions. The `htmx` API variable removes the headache of standard `header()` manipulations.
+
+### Inspecting Requests
 
 ```php
-use Totoglu\ProcessWire\Htmx\Ui;
+$htmx = wire('htmx');
 
-class MyModal extends Ui {
-    // 1. Component Identity
-    public string $name = 'my-modal';
+// Advanced Inspection
+if ($htmx->request->isHtmx()) {
+    $target  = $htmx->request->target();    // e.g. '#modal-content'
+    $trigger = $htmx->request->triggerName(); // e.g. 'delete-btn'
     
-    // 2. Smart Defaults
-    public array $defaultParams = [
-        'title' => 'Default Title'
-    ];
-    
-    public function render(): string {
-        $title = $this->param('title');
-        $content = $this->children; // Iterate $this->children or let parent component handle it
-        return "<div {$this->attributes->render()}><h1>{$title}</h1></div>";
-    }
+    // Automatically validate ProcessWire CSRF with HTTP 403 handling
+    $htmx->request->validateCsrf(throwException: true);
 }
 ```
 
-**Key Features of the `Ui` Architecture:**
-- **DOM Tree Management:** Components can act as wrappers via `$modal->addChild($btn)`. Seamlessly render all injected children using `$this->renderChildren()` or render a specific child directly using `$this->renderChild('my-component')` (supports internal parameter querying!).
-- **Tree Context & Traversing:** Inside deeply nested children, use `$btn->findParent('my-modal')` to find a specific parent container. You can also search explicitly by parameter: `$btn->findParent(null, 'data-role', 'admin')`.
-- **Downwards Traversal:** Use `$form->findChild('submit-btn')` to recursively search for and grab a nested child component by its `$name`. Can also search by parameter: `$form->findChild('input', 'name', 'email')`.
-- **Sensible Syntactic Sugar:** 
-  - `data('id', 5)` compiles to `data-id="5"`.
-  - `hx('post', '/url')` or `htmx('target', '#box')` compiles to `hx-post="/url"` and `hx-target="#box"`.
-  - `hyperscript('on click toggle .open')` and its alias `_('...')` handle hyperscript bindings safely.
-  - **Auto JSON encoding:** If you pass an array to any of the above helpers (or directly in constructor `attributes`), it is automatically safely converted to a JSON string. e.g. `$btn->hx('vals', ['id' => 5])` → `hx-vals='{"id":5}'`.
-  - `addClass('uk-button')` and `setAttribute('disabled', 'disabled')` manage HTML attributes fluently via the embedded `AttributeBag`.
-  - **XSS Protection:** Use the `$this->esc('malicious string')` helper inside your string renders to safely execute `htmlspecialchars` natively.
-- **Intelligent Identity (`getId()`):** Call `$btn->getId()` to fetch the component's unique ID. If it doesn't have one, it dynamically and securely registers a unique deterministic ID upon calling.
-- **Lifecycle Hooks:** Utilize `beforeRender()` or `afterRender(&$html)` to dynamically inject CSS/JS or modify the final HTML payload immediately around the render cycle.
-- **Strict Rendering:** Override `renderReady()` to validate prerequisites. If false, the component safely self-destructs and renders an empty string `''` without throwing structural errors.
+### Commanding Responses
 
-### 6. Dynamic Assets Loading
-
-Instead of enabling extensions globally via the module's config, you can dynamically load extensions (or `_hyperscript`) on-the-fly inside specific templates or modules.
+Inject actions right back to the browser:
 
 ```php
-// Dynamically load HTMX extensions at runtime
-$htmx->loadExtension('ws');
-$htmx->loadExtension(['preload', 'head-support']);
+// Redirect handling natively mapped to HTMX headers
+$htmx->response->redirect('/dashboard/');
+$htmx->response->pushUrl('/dashboard/?success=1');
 
-// Dynamically load hyperscript
-$htmx->loadHyperscript();
+// Form Validation (Throws HTTP 422 internally and swaps error UI)
+$htmx->response->validationError('#form-errors-banner');
+
+// Trigger Custom Frontend Events (Great for Alpine.js / Hyperscript interoperability)
+$htmx->response
+    ->trigger('cartUpdated', ['total' => 24.50])
+    ->triggerAfterSettle('closeModal');
+
+// Out-Of-Band (OOB) Fragment Swapping outside the active target!
+$htmx->fragment->addOobSwap('#header-cart', '<span>3</span>');
 ```
 
-### Frontend Asset Management & On-Demand Injection
+---
 
-If you prefer to keep your frontend as light as possible, you can strictly disable `Load Frontend Assets` in the Module Settings. Then, conditionally inject HTMX, Hyperscript, and specific Extensions **only on the templates that need them** using the `$htmx->use()` API.
+## 🌲 Object-Oriented UI Components (`Ui` Base Class)
+
+Beyond HTMX requests, this module ships with a powerful `Ui` class modeling a programmatic DOM architecture for building reusable presentation logic.
 
 ```php
-// In any ProcessWire template file (e.g. _main.php or basic-page.php)
-$htmx->use(extensions: ['sse', 'ws'], hyperscript: true);
-```
-*Note: We hook into `Page::render`, so simply calling `use()` anywhere during page generation will automatically inject the `<script>` tags nicely into your `</head>`!*
+use Totoglu\Htmx\Ui;
 
-If you are rendering a completely custom HTML block without a `</head>` tag, you can force the module to output the raw script tags directly:
+class Modal extends Ui {
+    public string $name = 'modal-widget';
+
+    public function render(): string {
+        // Fluent attribute generator and XSS escaping natively
+        $title = $this->esc($this->param('title', 'Default Title'));
+        
+        return "
+        <div {$this->attributes->render()}>
+            <h2>{$title}</h2>
+            <div class='content'>
+                {$this->renderChildren()}
+            </div>
+        </div>
+        ";
+    }
+}
+
+$modal = new Modal([
+    'title' => 'Warning!',
+    'id' => 'alert-modal'
+]);
+
+// Easily add syntactic HTMX attributes on the fly
+$modal->hx('get', '/process/')->hx('target', '.content');
+
+echo $modal->render();
+```
+
+---
+
+## ⚙️ Advanced Configuration (Admin & On-Demand)
+
+Under **Modules > Configure > Htmx**, you can toggle the global loading state of WebSockets, Server-Sent Events, or `_hyperscript`.
+
+However, if you prioritize performance, you can dynamically load extensions **only on the templates that need them** using the API:
+
 ```php
-echo $htmx->use('class-tools')->renderScripts();
+// _main.php
+$htmx = wire('htmx');
+
+// Inject WebSockets & Hyperscript purely for this request
+$htmx->use(extensions: ['ws', 'sse'], hyperscript: true);
 ```
 
-## Advanced Settings & Integrations
+### Auto Flash Messages
+By enabling **Auto Flash Messages** in the configuration, standard ProcessWire output (`$session->message()`) acts dynamically with HTMX responses. These are shipped as a `hx-trigger-after-swap: {"pw-messages": ...}` JSON event. You can then listen and hook Toast notifications gracefully on the client.
 
-### 7. Auto-Flash Messages
+### Auto Target Extraction
+With **Auto Target Extraction** enabled, if the browser requests a specific `#target`, the module will buffer the entire `$page->render()`, parse it with `DOMDocument`, extract specifically the `#target` node, and only send that fragment! This enables seamless degradation without writing complex `if ($config->ajax) { ... }` backend slicing logic.
 
-By default, HTMX triggers ProcessWire's `$session->message()` or `$session->error()` dynamically using HX-Trigger-After-Swap when requests overlap.
+---
 
-If **"Auto Flash Messages to HTMX"** is enabled in the module settings, any `$session->message()` or `$session->error()` called during the request will be automatically intercepted when $config->htmx is true. They are transformed into an `HX-Trigger-After-Swap` header named `pw-messages`.
-
-You can catch these on the frontend easily (e.g., using `_hyperscript`):
-```html
-<body _="on pw-messages(text, type) call showToast(text, type)">
-```
-
-### 8. Auto Target Extraction (Partial Rendering)
-
-If **"Auto Target Extraction"** is enabled, the module attempts to extract just the target HTML matching the inbound `HX-Target` ID from the final `$page->render()` output using `DOMDocument`. This lets developers return full HTML strings natively from templates, while the module transparently strips out the Layout and only returns the piece HTMX requested!
-
-## Behind The Scenes
-
-- The module inherently sidesteps redundant scripts injection on internal HTMX partials.
-- Classes are loaded cleanly through ProcessWire's native `ClassLoader`.
-- No Composer external loading is strictly mandated, optimizing this for pure ProcessWire plug-and-play environments.
+*Engineered with precision for modern ProcessWire architectures.*
