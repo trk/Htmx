@@ -155,14 +155,19 @@ class ClickCounter extends Component {
     public function increment(): void {
         $this->count++;
     }
+
+    public function decrement(): void {
+        $this->count--;
+    }
 }
 
 // Renders the component immediately using a raw string view
 echo $htmx->renderComponent(ClickCounter::class, ['count' => 0], "
     <div id='counter-{{id}}' hx-post='./' hx-target='this'>
-        <p>Clicks: <?= \$this->count ?></p>
+        <h3>Counter: <?= \$this->count ?></h3>
         <?= \$this->renderStatePayload() ?>
-        <button type='submit' name='hx__action' value='increment'>+1</button>
+        <button type='submit' name='hx__action' value='decrement'>-</button>
+        <button type='submit' name='hx__action' value='increment'>+</button>
     </div>
 ");
 ```
