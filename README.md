@@ -70,7 +70,7 @@ To make the developer experience as seamless as possible, the HTMX module includ
 By default, if the following directories exist in your ProcessWire installation, they are automatically registered with the native `ClassLoader`:
 
 - **`site/components/`** maps to the **`Htmx\Component`** namespace.
-- **`site/ui/`** maps to the **`Ui`** namespace.
+- **`site/ui/`** maps to the **`Htmx\Ui`** namespace.
 
 _Note: These directory paths are fully customizable (e.g. `my-components/`) via the Module Configuration screen._
 

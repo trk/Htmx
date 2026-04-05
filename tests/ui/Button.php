@@ -1,6 +1,6 @@
 <?php
 
-namespace Ui;
+namespace Htmx\Ui;
 
 use Totoglu\Htmx\Ui;
 

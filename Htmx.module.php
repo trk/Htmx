@@ -44,7 +44,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 104,
+            'version' => 105,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -72,7 +72,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('uiPath', 'ui/');
         $this->set('autoFlashMessages', true);
         $this->set('autoExtractTargets', false);
-        $this->set('allowComponentPaths', true);
+        $this->set('allowComponentPaths', false);
         $this->set('extensions', []);
     }
 
@@ -103,7 +103,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         }
 
         if (is_dir($sitePath . $uiDir . '/')) {
-            $this->wire('classLoader')->addNamespace('Ui', $sitePath . $uiDir . '/');
+            $this->wire('classLoader')->addNamespace('Htmx\Ui', $sitePath . $uiDir . '/');
             if ($this->allowComponentPaths) {
                 $this->allowedComponentPaths[] = $sitePath . $uiDir . '/';
             }
@@ -531,7 +531,7 @@ HTML;
         $f = $modules->get('InputfieldText');
         $f->attr('name', 'uiPath');
         $f->label = $this->_('UI Directory Path');
-        $f->description = $this->_('The directory relative to your `site/` folder where UI elements are stored. Default is `ui/`. If this directory exists, classes inside it will be registered under the `Ui` namespace.');
+        $f->description = $this->_('The directory relative to your `site/` folder where UI elements are stored. Default is `ui/`. If this directory exists, classes inside it will be registered under the `Htmx\Ui` namespace.');
         $f->value = $this->uiPath;
         $f->columnWidth = 50;
         $inputfields->add($f);

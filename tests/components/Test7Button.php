@@ -4,7 +4,7 @@ namespace Htmx\Component;
 
 use Totoglu\Htmx\Component;
 use Totoglu\Htmx\Ui;
-use Ui\Button;
+use Htmx\Ui\Button;
 
 class ButtonTestUiView extends Ui
 {
