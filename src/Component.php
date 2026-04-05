@@ -338,6 +338,8 @@ abstract class Component extends WireData
         if (!empty($this->view)) {
             // 1. Is it an OOP Ui Component?
             if ($this->view instanceof \Totoglu\Htmx\Ui) {
+                // Pass State-Aware context to the Ui node
+                $this->view->component = $this;
                 return (string) $this->view;
             }
 

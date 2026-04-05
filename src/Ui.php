@@ -16,6 +16,9 @@ abstract class Ui
     public ParameterBag $parameters;
     public AttributeBag $attributes;
 
+    // State-Aware Integration
+    public ?Component $component = null;
+
     // Parent-Child Relationship Properties
     public ?Ui $parent = null;
 
@@ -140,6 +143,17 @@ abstract class Ui
     {
         return $this->setAttribute('name', 'hx__action')
                     ->setAttribute('value', $actionName);
+    }
+
+    /**
+     * Easily render the Stateful Component's payload if this Ui is bound to a Component.
+     */
+    public function renderState(): string
+    {
+        if ($this->component) {
+            return $this->component->renderStatePayload();
+        }
+        return '';
     }
 
     /**
