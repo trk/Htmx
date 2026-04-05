@@ -171,9 +171,7 @@ class Button extends \Totoglu\Htmx\Ui {
 
 // 2. Instantiate and attach it to your State-Aware Component
 $btnView = new Button(['label' => 'Like +1', 'style' => 'primary']);
-$btnView->hx('post', './')->hx('target', 'this')
-        ->setAttribute('name', 'hx__action')
-        ->setAttribute('value', 'like');
+$btnView->hx('post', './')->hx('target', 'this')->action('like');
 
 // 3. The $btnView automatically merges with the Component state and lifecycle!
 echo $htmx->renderComponent(LikeButton::class, ['likes' => 0], $btnView);

@@ -133,6 +133,16 @@ abstract class Ui
     }
 
     /**
+     * Helper to configure this element as an action trigger.
+     * Sets: name="hx__action" value="$actionName"
+     */
+    public function action(string $actionName): self
+    {
+        return $this->setAttribute('name', 'hx__action')
+                    ->setAttribute('value', $actionName);
+    }
+
+    /**
      * Syntactic sugar for setting Hyperscript.
      * Cleans up newlines and extra spaces automatically.
      */
