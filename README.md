@@ -5,7 +5,7 @@
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success.svg)
 ![Security](https://img.shields.io/badge/Security-HMAC--SHA256-critical.svg)
 
-A powerful HTMX integration module designed specifically for ProcessWire. It bridges the gap between client-side reactivity and server-side authority, enabling you to build SPA-like interactions without abandoning traditional PHP rendering. 
+A powerful HTMX integration module designed specifically for ProcessWire. It bridges the gap between client-side reactivity and server-side authority, enabling you to build SPA-like interactions without abandoning traditional PHP rendering.
 
 By unifying **State-Aware Components**, **HMAC-SHA256 Payload Security**, and ProcessWire's native architecture, this module provides the ultimate Developer Experience (DX) inspired by frameworks like Livewire—exclusively for ProcessWire.
 
@@ -14,7 +14,7 @@ By unifying **State-Aware Components**, **HMAC-SHA256 Payload Security**, and Pr
 ## 🏗 Executive Overview
 
 - **Natively Bundled:** Supplies HTMX 2.x, WebSockets (`ws.js`), Server-Sent Events (`sse.js`), along with key extensions and `_hyperscript`, completely zero-dependency.
-- **State-Aware Component Architecture:** Seamless data hydration and dehydration between requests. 
+- **State-Aware Component Architecture:** Seamless data hydration and dehydration between requests.
 - **Object Synthesis:** Magically serialize full ProcessWire objects (like `Page`) down to lightweight secure IDs, restoring them effortlessly on the next request.
 - **Cryptographic Security:** End-to-end state manipulation protection with built-in HMAC-SHA256 signatures and TTL-based Replay Protection.
 - **Fluent Request/Response API:** Intercept, retarget, flash messages, and trigger custom JS events directly from ProcessWire controllers.
@@ -24,11 +24,13 @@ By unifying **State-Aware Components**, **HMAC-SHA256 Payload Security**, and Pr
 ## ⚙️ Installation
 
 **Via Composer (Recommended):**
+
 ```bash
 composer require trk/processwire-htmx
 ```
 
 **Via Manual Download:**
+
 1. Clone or extract into `site/modules/Htmx/`.
 2. In the ProcessWire Admin, log in and navigate to **Modules > Refresh**.
 3. Install **HTMX**.
@@ -51,7 +53,7 @@ sequenceDiagram
     Component->>Browser: Render UI + Encrypted __state Payload
 
     Note over Browser, Component: User interacts (e.g. Clicks Button)
-    
+
     Browser->>Htmx: HX-Request (POST) + __state
     Htmx->>Component: hydrate(__state)
     Component->>DB: Object Synthesis (Fetch Pages by ID)
@@ -73,9 +75,9 @@ namespace ProcessWire;
 use Totoglu\Htmx\Component;
 
 class LikeButton extends Component {
-    
+
     // ProcessWire Objects are automatically synthesized!
-    public Page $post; 
+    public Page $post;
 
     // Public properties are securely preserved across requests
     public int $likes = 0;
@@ -95,12 +97,12 @@ class LikeButton extends Component {
      */
     public function like(int $step = 1, Session $session) {
         $this->likes += $step;
-        
+
         // Let's also save to the DB...
         $this->post->of(false);
         $this->post->num_likes = $this->likes;
         $this->post->save('num_likes');
-        
+
         $session->message("You liked {$this->post->title}!");
     }
 }
@@ -130,6 +132,7 @@ Build the markup. You have full access to `$this` (the component context).
 The **`renderComponent()` DX Helper** dynamically manages initialization, hydration, action execution, and rendering. The third parameter (`$view`) is incredibly flexible—you can pass a file path, a raw HTML string, or an Object-Oriented `Ui` component!
 
 **Option A: Using a View File (Classic Approach)**
+
 ```php
 $htmx = wire('htmx');
 
@@ -158,15 +161,21 @@ echo $htmx->renderComponent(ClickCounter::class, ['count' => 0], "
 If you prefer a strictly typed, object-oriented DOM building approach, pass a `Totoglu\Htmx\Ui` subclass as the view:
 
 ```php
-use App\Ui\Elements\Button;
+// 1. Define your simple, reusable Ui Component
+class Button extends \Totoglu\Htmx\Ui {
+    public function render(): string {
+        $label = $this->esc($this->param('label', 'Click Me'));
+        return "<button {$this->attributes->render()}>{$label}</button>";
+    }
+}
 
-// The LikeButton component logic powers a clean Ui Button presentation!
+// 2. Instantiate and attach it to your State-Aware Component
 $btnView = new Button(['label' => 'Like +1', 'style' => 'primary']);
 $btnView->hx('post', './')->hx('target', 'this')
         ->setAttribute('name', 'hx__action')
         ->setAttribute('value', 'like');
 
-// The $btnView automatically merges with the Component state and lifecycle!
+// 3. The $btnView automatically merges with the Component state and lifecycle!
 echo $htmx->renderComponent(LikeButton::class, ['likes' => 0], $btnView);
 ```
 
@@ -195,7 +204,7 @@ $htmx = wire('htmx');
 if ($htmx->request->isHtmx()) {
     $target  = $htmx->request->target();    // e.g. '#modal-content'
     $trigger = $htmx->request->triggerName(); // e.g. 'delete-btn'
-    
+
     // Automatically validate ProcessWire CSRF with HTTP 403 handling
     $htmx->request->validateCsrf(throwException: true);
 }
@@ -237,7 +246,7 @@ class Modal extends Ui {
     public function render(): string {
         // Fluent attribute generator and XSS escaping natively
         $title = $this->esc($this->param('title', 'Default Title'));
-        
+
         return "
         <div {$this->attributes->render()}>
             <h2>{$title}</h2>
@@ -277,11 +286,13 @@ $htmx->use(extensions: ['ws', 'sse'], hyperscript: true);
 ```
 
 ### Auto Flash Messages
+
 By enabling **Auto Flash Messages** in the configuration, standard ProcessWire output (`$session->message()`) acts dynamically with HTMX responses. These are shipped as a `hx-trigger-after-swap: {"pw-messages": ...}` JSON event. You can then listen and hook Toast notifications gracefully on the client.
 
 ### Auto Target Extraction
+
 With **Auto Target Extraction** enabled, if the browser requests a specific `#target`, the module will buffer the entire `$page->render()`, parse it with `DOMDocument`, extract specifically the `#target` node, and only send that fragment! This enables seamless degradation without writing complex `if ($config->ajax) { ... }` backend slicing logic.
 
 ---
 
-*Engineered with precision for modern ProcessWire architectures.*
+_Engineered with precision for modern ProcessWire architectures._
