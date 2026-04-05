@@ -143,8 +143,8 @@ echo $htmx->renderComponent(LikeButton::class, [
 ], 'components/like-button.php');
 ```
 
-**Option B: Using a Raw HTML String (e.g. A Click Counter)**
-You don't even need an external view file! Define a simple class with an `increment` action:
+**Option B: Using a Render Method (e.g. A Click Counter)**
+You don't even need an external view file! Define a simple class with inline rendering:
 
 ```php
 use Totoglu\Htmx\Component;
@@ -152,24 +152,23 @@ use Totoglu\Htmx\Component;
 class ClickCounter extends Component {
     public int $count = 0;
     
-    public function increment(): void {
-        $this->count++;
-    }
+    public function increment(): void { $this->count++; }
+    public function decrement(): void { $this->count--; }
 
-    public function decrement(): void {
-        $this->count--;
+    public function render(): string {
+        return "
+        <div id='counter-{$this->id}' hx-post='./' hx-target='this'>
+            <h3>Counter: {$this->count}</h3>
+            {$this->renderStatePayload()}
+            <button type='submit' name='hx__action' value='decrement'>-</button>
+            <button type='submit' name='hx__action' value='increment'>+</button>
+        </div>
+        ";
     }
 }
 
-// Renders the component immediately using a raw string view
-echo $htmx->renderComponent(ClickCounter::class, ['count' => 0], "
-    <div id='counter-{{id}}' hx-post='./' hx-target='this'>
-        <h3>Counter: <?= \$this->count ?></h3>
-        <?= \$this->renderStatePayload() ?>
-        <button type='submit' name='hx__action' value='decrement'>-</button>
-        <button type='submit' name='hx__action' value='increment'>+</button>
-    </div>
-");
+// Renders the component immediately!
+echo $htmx->renderComponent(ClickCounter::class, ['count' => 0]);
 ```
 
 **Option C: Using an Object-Oriented `Ui` Component**
