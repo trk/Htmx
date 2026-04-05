@@ -191,7 +191,7 @@ HTML;
      * DX Helper: Render a given component class lifecycle in one line.
      * Initiates the component, fills props, mounts, hydrates, executes, and renders.
      */
-    public function renderComponent(string $class, array $props = []): string
+    public function renderComponent(string $class, array $props = [], mixed $view = null): string
     {
         if (!class_exists($class) || !is_subclass_of($class, '\Totoglu\Htmx\Component')) {
             if ($this->wire('config')->debug) {
@@ -203,6 +203,9 @@ HTML;
         try {
             /** @var \Totoglu\Htmx\Component $cmp */
             $cmp = new $class();
+            if ($view !== null) {
+                $cmp->setView($view);
+            }
             $cmp->fill($props);
             $cmp->mount();
             $cmp->hydrate();

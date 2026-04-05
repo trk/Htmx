@@ -14,6 +14,14 @@ abstract class Component extends WireData
 {
     protected string $stateKey = 'hx__state';
     
+    /**
+     * Opt-in View for this component.
+     * Can be a .php file path, a Totoglu\Htmx\Ui instance, or a raw HTML string.
+     * Protected so it does NOT get serialized into the HMAC-signed state payload 
+     * out of the box, preserving strict security against directory traversal.
+     */
+    protected mixed $view = null;
+    
     /** 
      * Unique identity for this specific component instance to prevent 
      * isolate state collisions if multiple identical components exist on page.
@@ -37,6 +45,15 @@ abstract class Component extends WireData
                 $this->{$k} = $v;
             }
         }
+        return $this;
+    }
+
+    /**
+     * Explicitly set the external view for this component.
+     */
+    public function setView(mixed $view): self
+    {
+        $this->view = $view;
         return $this;
     }
 
@@ -318,6 +335,42 @@ abstract class Component extends WireData
      */
     public function render(): string
     {
+        if (!empty($this->view)) {
+            // 1. Is it an OOP Ui Component?
+            if ($this->view instanceof \Totoglu\Htmx\Ui) {
+                return (string) $this->view;
+            }
+
+            // 2. Is it a file path?
+            if (is_string($this->view) && (strpos($this->view, '.php') !== false || is_file($this->wire('config')->paths->root . ltrim($this->view, '/')))) {
+                $paths = $this->wire('config')->paths;
+                $file = $this->view;
+                
+                // Assume the path is relative to templates if it doesn't start with /
+                // or the absolute root path.
+                if (strpos($file, '/') !== 0 && strpos($file, $paths->root) !== 0) {
+                    $file = $paths->templates . ltrim($file, '/');
+                } elseif (strpos($file, '/') === 0 && strpos($file, $paths->root) !== 0) {
+                    $file = rtrim($paths->root, '/') . $file;
+                }
+
+                if (is_file($file)) {
+                    ob_start();
+                    require $file;
+                    return ob_get_clean();
+                } else {
+                    if ($this->wire('config')->debug) {
+                        return "<!-- HTMX Component Error: View file not found at " . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . " -->";
+                    }
+                }
+            }
+
+            // 3. Last fallback: It's a raw HTML string
+            if (is_string($this->view)) {
+                return $this->view;
+            }
+        }
+        
         return '';
     }
 

@@ -125,22 +125,50 @@ Build the markup. You have full access to `$this` (the component context).
 </div>
 ```
 
-### 3. Rendering The Component (`_main.php` or controller)
+### 3. Rendering The Component (Flexible Views)
 
-Use the robust **`renderComponent()` DX Helper** anywhere in your application. The module will handle initialization, hydration, action execution, and rendering dynamically.
+The **`renderComponent()` DX Helper** dynamically manages initialization, hydration, action execution, and rendering. The third parameter (`$view`) is incredibly flexible—you can pass a file path, a raw HTML string, or an Object-Oriented `Ui` component!
 
+**Option A: Using a View File (Classic Approach)**
 ```php
 $htmx = wire('htmx');
 
-// One-line rendering! Pass the class and array of initial properties.
+// Renders the component using an external PHP template
 echo $htmx->renderComponent(LikeButton::class, [
     'post' => $page,
     'likes' => 0
-], 'components/like-button.php'); 
-// Assuming external template rendering. Alternatively, render() could be in the class.
+], 'components/like-button.php');
 ```
 
-*(Note: If your class implements the `render()` method, the 3rd parameter is not needed).*
+**Option B: Using a Raw HTML String (e.g. A Click Counter)**
+Imagine a simple `ClickCounter` component class holding a `$count` property and an `increment` method. You don't even need an external view file:
+
+```php
+// Renders the component immediately using a raw string view
+echo $htmx->renderComponent(ClickCounter::class, ['count' => 0], "
+    <div id='counter-{{id}}' hx-post='./' hx-target='this'>
+        <p>Clicks: <?= \$this->count ?></p>
+        <?= \$this->renderStatePayload() ?>
+        <button type='submit' name='hx__action' value='increment'>+1</button>
+    </div>
+");
+```
+
+**Option C: Using an Object-Oriented `Ui` Component**
+If you prefer a strictly typed, object-oriented DOM building approach, pass a `Totoglu\Htmx\Ui` subclass as the view:
+
+```php
+use App\Ui\Elements\Button;
+
+// The LikeButton component logic powers a clean Ui Button presentation!
+$btnView = new Button(['label' => 'Like +1', 'style' => 'primary']);
+$btnView->hx('post', './')->hx('target', 'this')
+        ->setAttribute('name', 'hx__action')
+        ->setAttribute('value', 'like');
+
+// The $btnView automatically merges with the Component state and lifecycle!
+echo $htmx->renderComponent(LikeButton::class, ['likes' => 0], $btnView);
+```
 
 ---
 
