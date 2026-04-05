@@ -5,6 +5,7 @@ namespace ProcessWire;
 use Totoglu\Htmx\Request;
 use Totoglu\Htmx\Response;
 use Totoglu\Htmx\Fragment;
+use Totoglu\Htmx\Component;
 
 /**
  * HTMX Module for ProcessWire
@@ -17,6 +18,7 @@ use Totoglu\Htmx\Fragment;
  * @property bool $autoFlashMessages Auto trigger flash messages?
  * @property bool $autoExtractTargets Auto extract targets using DOM?
  * @property array $extensions Extensions to load (sse, ws, etc)
+ * @property string $endpointUrl URL hook endpoint for state components (default: /hx/req)
  *
  * @author İskender TOTOĞLU, @ukyo (community), @trk (Github)
  * @website https://www.totoglu.com
@@ -32,11 +34,17 @@ class Htmx extends WireData implements Module, ConfigurableModule
     /** @var Fragment */
     public $fragment;
 
+    /** @var array<string, string> component alias map */
+    protected $components = [];
+
+    /** @var array<string> Valid and checked paths to components and UI that are allowed for rendering */
+    public $allowedComponentPaths = [];
+
     public static function getModuleInfo()
     {
         return [
             'title' => 'HTMX',
-            'version' => 103,
+            'version' => 104,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -59,8 +67,12 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
         $this->set('loadFrontendAssets', true);
         $this->set('loadHyperscript', false);
+        $this->set('endpointUrl', '/hx/req');
+        $this->set('componentsPath', 'components/');
+        $this->set('uiPath', 'ui/');
         $this->set('autoFlashMessages', true);
         $this->set('autoExtractTargets', false);
+        $this->set('allowComponentPaths', true);
         $this->set('extensions', []);
     }
 
@@ -75,6 +87,27 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->request = new Request();
         $this->response = new Response();
         $this->fragment = new Fragment();
+
+        // Zero-Configuration Auto-Discovery
+        // Automatically map configurable folders to namespaces if they exist
+        $sitePath = $this->wire('config')->paths->site;
+
+        $componentsDir = trim($this->componentsPath ?: 'components/', '/');
+        $uiDir = trim($this->uiPath ?: 'ui/', '/');
+
+        if (is_dir($sitePath . $componentsDir . '/')) {
+            $this->wire('classLoader')->addNamespace('Htmx\Component', $sitePath . $componentsDir . '/');
+            if ($this->allowComponentPaths) {
+                $this->allowedComponentPaths[] = $sitePath . $componentsDir . '/';
+            }
+        }
+
+        if (is_dir($sitePath . $uiDir . '/')) {
+            $this->wire('classLoader')->addNamespace('Ui', $sitePath . $uiDir . '/');
+            if ($this->allowComponentPaths) {
+                $this->allowedComponentPaths[] = $sitePath . $uiDir . '/';
+            }
+        }
 
         // Alias for backwards/template convenience
         $this->wire()->config->htmx = $this->request->isHtmx();
@@ -93,7 +126,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
             $this->wire('config')->scripts->add($baseUrl . "pw-csrf.js");
         }
 
-        // Hook after Page::render to process HTMX lifecycle
+        // Endpoint Hook for Stateless Component Processing
+        // Resolves POST requests to the configured endpointUrl
+        $this->endpointUrl = '/' . ltrim($this->endpointUrl ?: '/hx/req', '/');
+        if ($this->request->isHtmx()) {
+            $this->wire()->addHook($this->endpointUrl, $this, 'handleEndpoint');
+        }
+
+        // Hook after Page::render to process HTMX lifecycle array-based triggers or general frontend injections
         $this->wire()->addHookAfter('Page::render', function (HookEvent $e) {
             $e->replace = true;
             $html = $e->return;
@@ -188,12 +228,126 @@ HTML;
     }
 
     /**
-     * DX Helper: Render a given component class lifecycle in one line.
+     * Handle the stateless component POST request endpoint
+     */
+    public function handleEndpoint(\ProcessWire\HookEvent $e)
+    {
+        $input = $this->wire('input');
+
+        // Allow POST requests only
+        if (!$input->requestMethod('POST')) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Not a POST request. Method: " . $_SERVER['REQUEST_METHOD']);
+            http_response_code(400);
+            return "Bad Request: Only HTMX POST requests are allowed.";
+        }
+
+        $payload = $input->post('hx__state');
+        if (!$payload) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Missing hx__state in POST data.");
+            http_response_code(400);
+            return "Bad Request: Missing HTMX State Payload.";
+        }
+
+        $parts = explode('|', $payload, 2);
+        if (count($parts) !== 2) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Malformed payload. Parts count: " . count($parts));
+            http_response_code(400);
+            return "Bad Request: Malformed HTMX State Payload.";
+        }
+
+        list($encoded, $hash) = $parts;
+
+        // Decrypt & Validate payload class to boot it up
+        // (Note: $cmp->hydrate() performs strict HMAC/Replay checks again, 
+        // but we need to know WHICH class to instantiate first securely)
+        $decoded = json_decode(base64_decode($encoded), true);
+        if (!is_array($decoded) || empty($decoded['__cmp'])) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
+            http_response_code(400);
+            return "Bad Request: Invalid State Structure.";
+        }
+
+        $class = $decoded['__cmp'];
+
+        $class = $this->components[$class] ?? $class;
+
+        if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Invalid Component Class. Class: " . $class);
+            http_response_code(400);
+            return "Bad Request: Invalid Component Class.";
+        }
+
+        try {
+            /** @var Component $cmp */
+            $cmp = new $class();
+
+            // Hydrate from $_POST (Also performs full HMAC, Replay, and CSRF verification internally)
+            $cmp->hydrate();
+
+            // Execute Action (Will automatically run the matched action method based on POST payload)
+            $cmp->executeAction();
+
+            $html = (string) $cmp;
+
+            // 1. Inject accumulated OOB swaps
+            $oob = $this->fragment->getOobSwaps();
+            if (!empty($oob)) {
+                $html .= "\n" . $oob;
+            }
+
+            // 2. Process Auto Flash Messages
+            if ($this->autoFlashMessages) {
+                $flash = [];
+                try {
+                    $notices = $this->wire('notices');
+                    if ($notices && is_iterable($notices)) {
+                        foreach ($notices as $n) {
+                            $type = 'message';
+                            if (strpos(get_class($n), 'Error') !== false) $type = 'error';
+                            elseif (strpos(get_class($n), 'Warning') !== false) $type = 'warning';
+                            $flash[] = ['type' => $type, 'text' => $n->text];
+                        }
+                        if (method_exists($notices, 'removeAll')) {
+                            $notices->removeAll();
+                        }
+                    }
+                } catch (\Throwable $ex) {
+                }
+
+                if (!empty($flash)) {
+                    $this->response->triggerAfterSwap('pw-messages', $flash);
+                }
+            }
+
+            // URL Hooks auto-inject response headers, so we just return string!
+            return $html;
+        } catch (\Throwable $ex) {
+            http_response_code(500);
+            if ($this->wire('config')->debug) {
+                return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+            }
+            return "Internal Server Error";
+        }
+    }
+
+    /**
+     * Map a short alias to a Fully Qualified Class Name for easier rendering in templates.
+     */
+    public function registerComponent(string $alias, string $class): self
+    {
+        $this->components[$alias] = $class;
+        return $this;
+    }
+
+    /**
+     * DX Helper: Render a given component class or alias lifecycle in one line.
      * Initiates the component, fills props, mounts, hydrates, executes, and renders.
      */
-    public function renderComponent(string $class, array $props = [], mixed $view = null): string
+    public function renderComponent(string $classOrAlias, array $props = [], mixed $view = null): string
     {
-        if (!class_exists($class) || !is_subclass_of($class, '\Totoglu\Htmx\Component')) {
+        $class = $this->components[$classOrAlias] ?? $classOrAlias;
+
+        if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
             if ($this->wire('config')->debug) {
                 return "<!-- HTMX Error: {$class} is not a valid Totoglu\Htmx\Component. -->";
             }
@@ -201,8 +355,15 @@ HTML;
         }
 
         try {
-            /** @var \Totoglu\Htmx\Component $cmp */
+            /** @var Component $cmp */
             $cmp = new $class();
+
+            // Only register components that use the global endpoint (alias).
+            // Components with their own endpoint ($cmp->setEndpointUrl()) are not registered.
+            if ($cmp->requestUrl() === $this->endpointUrl) {
+                $shortName = (new \ReflectionClass($cmp))->getShortName();
+                $this->registerComponent($shortName, $class);
+            }
             if ($view !== null) {
                 $cmp->setView($view);
             }
@@ -350,6 +511,38 @@ HTML;
     public function getModuleConfigInputfields(InputfieldWrapper $inputfields)
     {
         $modules = $this->wire('modules');
+
+        $f = $modules->get('InputfieldText');
+        $f->attr('name', 'endpointUrl');
+        $f->label = $this->_('HTMX Component Endpoint URL');
+        $f->description = $this->_('The dedicated stateless path where HTMX Component POST actions are dispatched to (e.g. `hx/req`). Must be a valid URI path.');
+        $f->value = $this->endpointUrl;
+        $f->columnWidth = 100;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldText');
+        $f->attr('name', 'componentsPath');
+        $f->label = $this->_('Components Directory Path');
+        $f->description = $this->_('The directory relative to your `site/` folder where HTMX components are stored. Default is `components/`. If this directory exists, classes inside it will be registered under the `Htmx\Component` namespace.');
+        $f->value = $this->componentsPath;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldText');
+        $f->attr('name', 'uiPath');
+        $f->label = $this->_('UI Directory Path');
+        $f->description = $this->_('The directory relative to your `site/` folder where UI elements are stored. Default is `ui/`. If this directory exists, classes inside it will be registered under the `Ui` namespace.');
+        $f->value = $this->uiPath;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'allowComponentPaths');
+        $f->label = $this->_('Allow Component Paths in File Render');
+        $f->description = $this->_('When enabled, the configured components and UI directories will be automatically added to `allowedPaths` in `$files->render()`. This is required to render views outside the typical `templates` directory without strict file path restrictions.');
+        $f->checked = (bool)$this->allowComponentPaths;
+        $f->columnWidth = 100;
+        $inputfields->add($f);
 
         $f = $modules->get('InputfieldCheckbox');
         $f->attr('name', 'loadFrontendAssets');

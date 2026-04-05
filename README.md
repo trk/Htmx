@@ -63,14 +63,31 @@ sequenceDiagram
 
 ---
 
+## 🪄 Zero-Configuration Auto-Discovery
+
+To make the developer experience as seamless as possible, the HTMX module includes automatic namespace registration for your components and UI elements.
+
+By default, if the following directories exist in your ProcessWire installation, they are automatically registered with the native `ClassLoader`:
+
+- **`site/components/`** maps to the **`Htmx\Component`** namespace.
+- **`site/ui/`** maps to the **`Ui`** namespace.
+
+_Note: These directory paths are fully customizable (e.g. `my-components/`) via the Module Configuration screen._
+
+By default, the module securely sandboxes all component rendering strictly within these explicitly defined directories and the native `templates/` folder. This is configurable via the **Allow Component Paths** module setting, balancing optimal Developer Experience (DX) with security.
+
+This means you can place your component class files directly in `site/components/` and simply declare the `namespace Htmx\Component;`, and the module will instantly know how to load and render them during stateless POST requests without requiring custom auto-loaders or `require_once` statements.
+
+---
+
 ## 🚀 Quick Start: Building a Stateful Component
 
-Let's build a Livewire-style "Like" button that remembers its state, seamlessly tied to a specific ProcessWire Page.
+Let's build a Livewire-style "Like" button that remembers its state, seamlessly tied to a specific ProcessWire Page. We'll utilize the auto-discovery feature by placing our component in `site/components/LikeButton.php`.
 
-### 1. Create Your Component (`LikeButton.php`)
+### 1. Create Your Component (`site/components/LikeButton.php`)
 
 ```php
-namespace ProcessWire;
+namespace Htmx\Component;
 
 use Totoglu\Htmx\Component;
 
@@ -151,7 +168,7 @@ use Totoglu\Htmx\Component;
 
 class ClickCounter extends Component {
     public int $count = 0;
-    
+
     public function increment(): void { $this->count++; }
     public function decrement(): void { $this->count--; }
 
@@ -303,8 +320,23 @@ By enabling **Auto Flash Messages** in the configuration, standard ProcessWire o
 
 ### Auto Target Extraction
 
-With **Auto Target Extraction** enabled, if the browser requests a specific `#target`, the module will buffer the entire `$page->render()`, parse it with `DOMDocument`, extract specifically the `#target` node, and only send that fragment! This enables seamless degradation without writing complex `if ($config->ajax) { ... }` backend slicing logic.
+With **Auto Target Extraction** enabled, if the browser requests a specific `#target`, the module will buffer the entire `$page->render()`, parse it with `DOMDocument`, extract specifically the `#target` node, and only send that fragment! This enables seamless degradation without writing complex `if ($config->htmx || wire('htmx')->request->isHtmx()) { ... }` backend slicing logic.
 
 ---
 
-_Engineered with precision for modern ProcessWire architectures._
+## 🧪 Testing and Verification
+
+The module ships with an automated architectural checking script alongside sample components (`Counter`, `Form`, `UiObject`, etc.) required for ensuring compatibility across environments. These are kept in an isolated `tests/` directory.
+
+To test the module functionality:
+
+1. Copy the `components/` and `ui/` directories from `site/modules/Htmx/tests/` into your standard `site/` folder.
+2. Open `site/modules/Htmx/tests/run.php` and copy its contents.
+3. Paste the logic directly into one of your ProcessWire frontend template files (like `basic-page.php` or `home.php`).
+4. If you want to explicitly test component bindings to specific pages, you can set the `$pageId` variable inside the script.
+
+These isolated checks help detect side-effects if you build structural configurations and dynamic ProcessWire template deployments that rely on `Htmx`.
+
+---
+
+🚀 _Engineered with precision for modern ProcessWire architectures._ ✨

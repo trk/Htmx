@@ -13,7 +13,7 @@ use ProcessWire\WireData;
 abstract class Component extends WireData
 {
     protected string $stateKey = 'hx__state';
-    
+
     /**
      * Opt-in View for this component.
      * Can be a .php file path, a Totoglu\Htmx\Ui instance, or a raw HTML string.
@@ -21,7 +21,12 @@ abstract class Component extends WireData
      * out of the box, preserving strict security against directory traversal.
      */
     protected mixed $view = null;
-    
+
+    /**
+     * Overrides the global HTMX module endpoint URL specifically for this component.
+     */
+    protected string $endpointUrl = '';
+
     /** 
      * Unique identity for this specific component instance to prevent 
      * isolate state collisions if multiple identical components exist on page.
@@ -347,7 +352,7 @@ abstract class Component extends WireData
             if (is_string($this->view) && (strpos($this->view, '.php') !== false || is_file($this->wire('config')->paths->root . ltrim($this->view, '/')))) {
                 $paths = $this->wire('config')->paths;
                 $file = $this->view;
-                
+
                 // Assume the path is relative to templates if it doesn't start with /
                 // or the absolute root path.
                 if (strpos($file, '/') !== 0 && strpos($file, $paths->root) !== 0) {
@@ -357,9 +362,25 @@ abstract class Component extends WireData
                 }
 
                 if (is_file($file)) {
-                    ob_start();
-                    require $file;
-                    return ob_get_clean();
+                    // Extract public properties so they are available as local variables in the view
+                    $vars = ['component' => $this];
+                    $ref = new \ReflectionClass($this);
+                    foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
+                        if ($prop->isInitialized($this)) {
+                            $vars[$prop->getName()] = $prop->getValue($this);
+                        }
+                    }
+
+                    $options = [];
+                    if (!empty($this->wire('htmx')->allowedComponentPaths)) {
+                        $options = [
+                            'allowedPaths' => array_merge(
+                                [$this->wire('config')->paths->templates],
+                                $this->wire('htmx')->allowedComponentPaths
+                            )
+                        ];
+                    }
+                    return $this->wire('files')->render($file, $vars, $options);
                 } else {
                     if ($this->wire('config')->debug) {
                         return "<!-- HTMX Component Error: View file not found at " . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . " -->";
@@ -372,7 +393,7 @@ abstract class Component extends WireData
                 return $this->view;
             }
         }
-        
+
         return '';
     }
 
@@ -380,6 +401,22 @@ abstract class Component extends WireData
      * Lifecycle hook executed immediately after render().
      */
     protected function afterRender(string &$html): void {}
+
+    public function requestUrl(): string
+    {
+        if ($this->endpointUrl !== '') {
+            return $this->endpointUrl;
+        }
+
+        $htmx = $this->wire('htmx');
+        return $htmx && $htmx->endpointUrl ? $htmx->endpointUrl : '/hx/req';
+    }
+
+    public function setEndpointUrl(string $url): self
+    {
+        $this->endpointUrl = $url;
+        return $this;
+    }
 
     /**
      * Magic string casting safely evaluates the render lifecycle.

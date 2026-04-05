@@ -94,6 +94,22 @@ abstract class Ui
     }
 
     /**
+     * Check if a custom HTML attribute exists.
+     */
+    public function hasAttribute(string $key): bool
+    {
+        return $this->attributes->has($key);
+    }
+
+    /**
+     * Get a custom HTML attribute.
+     */
+    public function getAttribute(string $key, mixed $default = null): mixed
+    {
+        return $this->attributes->get($key, $default);
+    }
+
+    /**
      * Add a CSS class and return self for chaining.
      */
     public function addClass(string|array $class): self
