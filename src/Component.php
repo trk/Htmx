@@ -1,6 +1,6 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx;
+namespace Totoglu\Htmx;
 
 use ProcessWire\WireData;
 
@@ -13,11 +13,38 @@ use ProcessWire\WireData;
 abstract class Component extends WireData
 {
     protected string $stateKey = 'hx__state';
+    
+    /** 
+     * Unique identity for this specific component instance to prevent 
+     * isolate state collisions if multiple identical components exist on page.
+     */
+    public string $id;
 
     public function __construct()
     {
         parent::__construct();
+        $this->id = uniqid(basename(str_replace('\\', '/', static::class)) . '-');
     }
+
+    /**
+     * Helper to mass-assign properties to the component
+     */
+    public function fill(array $props): self
+    {
+        $ref = new \ReflectionClass($this);
+        foreach ($props as $k => $v) {
+            if ($ref->hasProperty($k) && $ref->getProperty($k)->isPublic()) {
+                $this->{$k} = $v;
+            }
+        }
+        return $this;
+    }
+
+    /**
+     * Lifecycle Hook: Executed once during instantiation before render
+     * Useful for setting up data if props are passed.
+     */
+    public function mount(): void {}
 
     /**
      * Call this inside your component script/render block to restore state
@@ -52,7 +79,12 @@ abstract class Component extends WireData
                             throw new \Exception("HTMX Component Tampering Detected: State payload does not belong to this component.");
                         }
 
-                        // 3. Auto-Map Public Properties
+                        // 3. Instance Identity Preservation
+                        if (isset($decoded['__id'])) {
+                            $this->id = $decoded['__id'];
+                        }
+
+                        // 4. Auto-Map Public Properties
                         $this->mapStateToProperties($decoded);
                     }
                 } else {
@@ -75,9 +107,12 @@ abstract class Component extends WireData
 
         // 1. Replay Protection marker
         $stateArray['__expires'] = time() + ($ttlHours * 3600);
-        
+
         // 2. Cross-Component Injection Protection (Locks this payload cryptographically to THIS specific class)
         $stateArray['__cmp'] = static::class;
+
+        // 3. Instance Isolation (Allows tracking multiple instances of the same component)
+        $stateArray['__id'] = $this->id;
 
         $encoded = base64_encode(json_encode($stateArray ?: []));
         $salt = $this->wire('config')->userAuthSalt;
@@ -103,19 +138,19 @@ abstract class Component extends WireData
     public function executeAction(string $actionParam = 'hx__action'): bool
     {
         $input = $this->wire('input');
-        
-        // 1. Core Enterprise Security: Actions (State Mutations) MUST be POST requests only.
+
+        // Actions (State Mutations) MUST be POST requests only.
         // This inherently prevents GET-based CSRF bypasses since CSRF tokens are validated below.
         if ($input->requestMethod('GET')) {
             return false;
         }
 
-        // 2. Core Enterprise Security: Enforce CSRF token validation on any State Mutation via POST
+        // Enforce CSRF token validation on any State Mutation via POST
         if ($input->requestMethod('POST') && $this->wire('session') && $this->wire('session')->CSRF) {
             // Validate throws standard WireCSRFException automatically if token missing/invalid
-            $this->wire('session')->CSRF->validate(); 
+            $this->wire('session')->CSRF->validate();
         }
-        
+
         // Strictly resolve action ONLY from POST payload
         $action = $input->post($actionParam);
 
@@ -127,7 +162,6 @@ abstract class Component extends WireData
         if ($ref->hasMethod($action)) {
             $method = $ref->getMethod($action);
 
-            // 3. Core Enterprise Security: 
             // - Prevent calling constructor, hooks, or internal magic methods directly (`_`)
             // - Prevent arbitrary execution of base Component methods or inherited Wire/WireData methods
             // Only methods explicitly declared on the user's subclass (or their custom traits) are allowed.
@@ -139,7 +173,7 @@ abstract class Component extends WireData
                     $name = $param->getName();
                     $type = $param->getType();
                     $val = null;
-                    
+
                     // 1. Dependency Injection for ProcessWire API Variables
                     // We prioritize object resolution and IGNORE user POST input for object hints
                     // to prevent TypeErrors or spoofing attacks.
@@ -155,12 +189,12 @@ abstract class Component extends WireData
                     } else {
                         // 2. Resolve scalar inputs ONLY from POST payload for mutation integrity
                         $val = $input->post($name);
-                        
+
                         // 3. Type-Safe Parameter Casting for scalar inputs
                         if ($val !== null && $type && $type instanceof \ReflectionNamedType && $type->isBuiltin()) {
                             $typeName = $type->getName();
                             $isArr = is_array($val);
-                            
+
                             if ($typeName === 'int') {
                                 $val = $isArr ? 0 : (int)$val;
                             } elseif ($typeName === 'float') {
@@ -204,7 +238,7 @@ abstract class Component extends WireData
             if (!$prop->isInitialized($this)) continue;
 
             $val = $prop->getValue($this);
-            
+
             // 1. ProcessWire Object Synthesis (Dehydration)
             if (is_object($val)) {
                 if ($val instanceof \ProcessWire\Page && $val->id) {
@@ -213,6 +247,11 @@ abstract class Component extends WireData
                 } elseif ($val instanceof \ProcessWire\PageArray && $val->count()) {
                     $state[$name] = ['__wire_model' => 'PageArray', 'ids' => $val->explode('id')];
                     continue;
+                } else {
+                    if ($this->wire('config')->debug) {
+                        $this->wire('log')->warning("Component State: Unrecognized Object Type (" . get_class($val) . ") for property '{$name}' cannot be dehydrated securely.");
+                    }
+                    continue; // Skip unsupported objects safely
                 }
             }
 
@@ -237,7 +276,7 @@ abstract class Component extends WireData
             if ($ref->hasProperty($k)) {
                 $prop = $ref->getProperty($k);
                 if ($prop->isPublic()) {
-                    
+
                     // 1. ProcessWire Object Synthesis (Hydration)
                     if (is_array($v) && isset($v['__wire_model'])) {
                         if ($v['__wire_model'] === 'Page' && isset($v['id'])) {
@@ -253,7 +292,7 @@ abstract class Component extends WireData
                             continue;
                         }
                     }
-                    
+
                     // 2. Primitive type coercion if defined, but loosely is fine for PHP 8+ strictness mostly
                     $prop->setValue($this, $v);
                 }
@@ -272,9 +311,7 @@ abstract class Component extends WireData
     /**
      * Lifecycle hook executed just before render().
      */
-    protected function beforeRender(): void
-    {
-    }
+    protected function beforeRender(): void {}
 
     /**
      * Core render method to implement in child classes.
@@ -287,9 +324,7 @@ abstract class Component extends WireData
     /**
      * Lifecycle hook executed immediately after render().
      */
-    protected function afterRender(string &$html): void
-    {
-    }
+    protected function afterRender(string &$html): void {}
 
     /**
      * Magic string casting safely evaluates the render lifecycle.

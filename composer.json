@@ -19,7 +19,7 @@
   ],
   "autoload": {
     "psr-4": {
-      "Totoglu\\ProcessWire\\Htmx\\": "src/"
+      "Totoglu\\Htmx\\": "src/"
     }
   },
   "require": {

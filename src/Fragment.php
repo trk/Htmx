@@ -1,9 +1,8 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx;
+namespace Totoglu\Htmx;
 
 use ProcessWire\WireData;
-use ProcessWire\TemplateFile;
 
 /**
  * Fragment
@@ -25,7 +24,7 @@ class Fragment extends WireData
         // Try to inject natively if the HTMl root node contains the target ID.
         // This avoids destructive <div> wrappers breaking tables or semantic structures.
         $pattern = '/^(<[a-zA-Z0-9\-]+)([^>]*id=[\'"]' . preg_quote($id, '/') . '[\'"][^>]*)(>)/i';
-        
+
         if ($isId && preg_match($pattern, $html)) {
             // Inject hx-swap-oob into the existing root node
             $wrapped = preg_replace(

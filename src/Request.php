@@ -1,6 +1,6 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx;
+namespace Totoglu\Htmx;
 
 use ProcessWire\WireData;
 
@@ -82,11 +82,11 @@ class Request extends WireData
     {
         $session = $this->wire('session');
         $valid = $session->CSRF->hasValidToken();
-        
+
         if (!$valid && $throwException) {
             throw new \ProcessWire\WirePermissionException("CSRF Validation Failed. Unauthorized HTMX request.");
         }
-        
+
         return $valid;
     }
 

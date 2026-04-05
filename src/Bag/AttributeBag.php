@@ -1,6 +1,6 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx\Bag;
+namespace Totoglu\Htmx\Bag;
 
 /**
  * AttributeBag
@@ -30,7 +30,7 @@ class AttributeBag extends ParameterBag
     {
         $currentClasses = $this->getClasses();
         $newClasses = is_array($class) ? $class : explode(' ', $class);
-        
+
         $merged = array_unique(array_filter(array_merge($currentClasses, $newClasses)));
         $this->set('class', implode(' ', $merged));
     }
@@ -39,9 +39,9 @@ class AttributeBag extends ParameterBag
     {
         $currentClasses = $this->getClasses();
         $targetClasses = is_array($class) ? $class : explode(' ', $class);
-        
+
         $filtered = array_diff($currentClasses, $targetClasses);
-        
+
         if (empty($filtered)) {
             $this->remove('class');
         } else {

@@ -1,9 +1,9 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx;
+namespace Totoglu\Htmx;
 
-use Totoglu\ProcessWire\Htmx\Bag\ParameterBag;
-use Totoglu\ProcessWire\Htmx\Bag\AttributeBag;
+use Totoglu\Htmx\Bag\ParameterBag;
+use Totoglu\Htmx\Bag\AttributeBag;
 
 /**
  * Ui
@@ -15,17 +15,17 @@ abstract class Ui
 {
     public ParameterBag $parameters;
     public AttributeBag $attributes;
-    
+
     // Parent-Child Relationship Properties
     public ?Ui $parent = null;
-    
+
     /** @var array<int, Ui|string> */
     public array $children = [];
-    
+
     public bool $isContainer = false;
     public bool $isElement = true;
     public string $name = 'ui-element';
-    
+
     /** @var array<string, mixed> Default parameters automatically merged into the component */
     public array $defaultParams = [];
 
@@ -59,7 +59,7 @@ abstract class Ui
         if (func_num_args() === 1) {
             return $this->parameters->get($key);
         }
-        
+
         $this->parameters->set($key, $value);
         return $this;
     }
@@ -131,7 +131,7 @@ abstract class Ui
     {
         return $this->setAttribute("hx-{$key}", $value, $asJson);
     }
-    
+
     /**
      * Syntactic sugar for setting Hyperscript.
      * Cleans up newlines and extra spaces automatically.
@@ -142,7 +142,7 @@ abstract class Ui
         $cleanScript = preg_replace('/\s+/', ' ', trim($script));
         return $this->setAttribute('_', $cleanScript);
     }
-    
+
     /**
      * Short alias for hyperscript().
      */
@@ -160,17 +160,13 @@ abstract class Ui
      * Lifecycle hook executed just before render().
      * Children can override this to prepare state/attributes.
      */
-    protected function beforeRender(): void
-    {
-    }
+    protected function beforeRender(): void {}
 
     /**
      * Lifecycle hook executed immediately after render().
      * Children can override this to modify the final HTML.
      */
-    protected function afterRender(string &$html): void
-    {
-    }
+    protected function afterRender(string &$html): void {}
 
     /**
      * DOM Tree Management: Add a child component/string
@@ -204,11 +200,11 @@ abstract class Ui
             if ($child instanceof Ui) {
                 $nameMatches = ($name === null || $child->name === $name);
                 $paramMatches = ($paramKey === null || $child->param($paramKey) === $paramValue);
-                
+
                 if ($nameMatches && $paramMatches) {
                     return $child;
                 }
-                
+
                 if ($nested = $child->findChild($name, $paramKey, $paramValue)) {
                     return $nested;
                 }
@@ -261,7 +257,7 @@ abstract class Ui
     {
         return $this->parent;
     }
-    
+
     /**
      * Traverse up the tree to find the closest parent mapping the given logical name, class name, or parameter.
      */
@@ -277,16 +273,16 @@ abstract class Ui
                 $shortClass = basename(str_replace('\\', '/', $class));
                 $nameMatches = ($current->name === $name || $class === $name || $shortClass === $name);
             }
-            
+
             $paramMatches = ($paramKey === null || $current->param($paramKey) === $paramValue);
-            
+
             if ($nameMatches && $paramMatches) {
                 return $current;
             }
-            
+
             $current = $current->getParent();
         }
-        
+
         return null;
     }
 

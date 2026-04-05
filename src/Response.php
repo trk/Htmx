@@ -1,6 +1,6 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx;
+namespace Totoglu\Htmx;
 
 use ProcessWire\WireData;
 

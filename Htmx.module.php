@@ -2,9 +2,9 @@
 
 namespace ProcessWire;
 
-use Totoglu\ProcessWire\Htmx\Request;
-use Totoglu\ProcessWire\Htmx\Response;
-use Totoglu\ProcessWire\Htmx\Fragment;
+use Totoglu\Htmx\Request;
+use Totoglu\Htmx\Response;
+use Totoglu\Htmx\Fragment;
 
 /**
  * HTMX Module for ProcessWire
@@ -36,7 +36,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 102,
+            'version' => 103,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -55,7 +55,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public function __construct()
     {
         // Load the ProcessWire native ClassLoader for our `src` directory namespace
-        $this->wire('classLoader')->addNamespace('Totoglu\ProcessWire\Htmx', __DIR__ . '/src/');
+        $this->wire('classLoader')->addNamespace('Totoglu\Htmx', __DIR__ . '/src/');
 
         $this->set('loadFrontendAssets', true);
         $this->set('loadHyperscript', false);
@@ -64,14 +64,17 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('extensions', []);
     }
 
+    public function wired()
+    {
+        // Inject `$htmx` into ProcessWire's API.
+        $this->wire('htmx', $this);
+    }
+
     public function init()
     {
         $this->request = new Request();
         $this->response = new Response();
         $this->fragment = new Fragment();
-
-        // Inject `$htmx` into ProcessWire's API.
-        $this->wire('htmx', $this);
 
         // Alias for backwards/template convenience
         $this->wire()->config->htmx = $this->request->isHtmx();
@@ -99,16 +102,25 @@ class Htmx extends WireData implements Module, ConfigurableModule
             if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
                 $targetId = $this->request->target();
                 if ($targetId && strpos($html, 'id="' . $targetId . '"') !== false) {
-                    libxml_use_internal_errors(true);
-                    $dom = new \DOMDocument();
-                    if (@$dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
-                        $xpath = new \DOMXPath($dom);
-                        $nodes = $xpath->query("//*[@id='$targetId']");
-                        if ($nodes->length > 0) {
-                            $html = $dom->saveHTML($nodes->item(0));
+                    try {
+                        libxml_use_internal_errors(true);
+                        $dom = new \DOMDocument();
+                        // Protect UTF-8 characters from DOMDocument mangling
+                        $encodedHtml = mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8');
+                        if (@$dom->loadHTML('<?xml encoding="utf-8" ?>' . $encodedHtml, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
+                            $xpath = new \DOMXPath($dom);
+                            $nodes = $xpath->query("//*[@id='$targetId']");
+                            if ($nodes->length > 0) {
+                                // Re-decode entities internally generated during parsing
+                                $html = html_entity_decode($dom->saveHTML($nodes->item(0)));
+                            }
+                        }
+                        libxml_clear_errors();
+                    } catch (\Throwable $e) {
+                        if ($this->wire('config')->debug) {
+                            $this->wire('log')->error("HTMX autoExtractTargets DOM parser failed: " . $e->getMessage());
                         }
                     }
-                    libxml_clear_errors();
                 }
             }
 
@@ -163,7 +175,8 @@ HTML;
                             $notices->removeAll();
                         }
                     }
-                } catch (\Throwable $e) {}
+                } catch (\Throwable $e) {
+                }
 
                 if (!empty($flash)) {
                     $this->response->triggerAfterSwap('pw-messages', $flash);
@@ -172,6 +185,35 @@ HTML;
 
             $e->return = $html;
         });
+    }
+
+    /**
+     * DX Helper: Render a given component class lifecycle in one line.
+     * Initiates the component, fills props, mounts, hydrates, executes, and renders.
+     */
+    public function renderComponent(string $class, array $props = []): string
+    {
+        if (!class_exists($class) || !is_subclass_of($class, '\Totoglu\Htmx\Component')) {
+            if ($this->wire('config')->debug) {
+                return "<!-- HTMX Error: {$class} is not a valid Totoglu\Htmx\Component. -->";
+            }
+            return '';
+        }
+
+        try {
+            /** @var \Totoglu\Htmx\Component $cmp */
+            $cmp = new $class();
+            $cmp->fill($props);
+            $cmp->mount();
+            $cmp->hydrate();
+            $cmp->executeAction();
+            return (string) $cmp;
+        } catch (\Throwable $e) {
+            if ($this->wire('config')->debug) {
+                return "<!-- HTMX Component Lifecycle Error ({$class}): " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+            }
+            return '';
+        }
     }
 
     /**

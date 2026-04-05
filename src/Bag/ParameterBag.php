@@ -1,6 +1,6 @@
 <?php
 
-namespace Totoglu\ProcessWire\Htmx\Bag;
+namespace Totoglu\Htmx\Bag;
 
 /**
  * ParameterBag
