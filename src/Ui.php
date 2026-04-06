@@ -5,7 +5,6 @@ namespace Totoglu\Htmx;
 use Totoglu\Htmx\Bag\ParameterBag;
 use Totoglu\Htmx\Bag\AttributeBag;
 
-use function ProcessWire
 /**
  * Ui
  * 
