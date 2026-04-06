@@ -42,6 +42,14 @@ abstract class Ui
      */
     protected ?Htmx $htmx = null;
 
+    /**
+     * Static factory method to instantiate a component fluently without the 'new' keyword.
+     */
+    public static function make(array|ParameterBag $parameters = [], array|AttributeBag $attributes = []): static
+    {
+        return new static($parameters, $attributes);
+    }
+
     public function __construct(array|ParameterBag $parameters = [], array|AttributeBag $attributes = [])
     {
         // Assign HTMX API instance

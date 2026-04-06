@@ -289,15 +289,13 @@ class Modal extends Ui {
     }
 }
 
-$modal = new Modal([
-    'title' => 'Warning!'
-]);
-
-// Easily add syntactic HTMX attributes or classes natively without messy string concats
-$modal->attributes->addClass('uk-modal-dialog')->id('alert-modal');
-$modal->hx('get', '/process/')->hx('target', '.content');
-
-echo $modal->render();
+// 2. Use the static make() for fluent chaining without the `new` keyword
+echo Modal::make(['title' => 'Warning!'])
+    ->addClass('uk-modal-dialog')
+    ->setAttribute('id', 'alert-modal')
+    ->hx('get', '/process/')
+    ->hx('target', '.content')
+    ->render();
 ```
 
 ---

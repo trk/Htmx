@@ -59,6 +59,7 @@ Use this for pure presentation (like atomic design elements: Button, Card, Notic
 - **Parameter Management (`ParameterBag`):** Access props safely using strict typed methods off `$this->parameters` e.g. `getString('key')`, `getInt('key')`, `getBool('key')`, `getArray('key')`. Quick mixed access is available via `$this->param('key')`.
 - **Attribute Management (`AttributeBag`):** Modifying HTML attributes is fluent and powerful tracking unique keys. Example: `$this->attributes->addClass('active')->removeClass('hidden')->toggleClass('uk-open', true)->id('my-id')`. Additionally use `$this->hx('post', '/url')` or `$this->data('value', 5)` for easy attribute bindings.
 - **Rendering Attributes:** You MUST echo `$this->attributes->render()` inside the root HTML node.
+- **Instantiation:** Whenever possible, use the static `make()` factory method for fluent method chaining without the `new` keyword or intermediate variables. Example: `Alert::make(['type' => 'info'])->addClass('my-2')->render()`.
 - **Children:** Render nested children via `$this->renderChildren()`.
 
 ### Example: UI Element
