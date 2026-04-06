@@ -2,8 +2,11 @@
 
 namespace Totoglu\Htmx;
 
+use ProcessWire\Htmx;
 use Totoglu\Htmx\Bag\ParameterBag;
 use Totoglu\Htmx\Bag\AttributeBag;
+
+use function ProcessWire\wire;
 
 /**
  * Ui
@@ -33,14 +36,14 @@ abstract class Ui
     public array $defaultParams = [];
 
     /**
-     * @var \ProcessWire\Htmx|null Quick access to the HTMX module API
+     * @var Htmx|null Quick access to the HTMX module API
      */
-    protected ?\ProcessWire\Htmx $htmx = null;
+    protected ?Htmx $htmx = null;
 
     public function __construct(array $parameters = [], array $attributes = [])
     {
         // Assign HTMX API instance
-        $this->htmx = \ProcessWire\wire('htmx');
+        $this->htmx = wire('htmx');
 
         // Fallback default parameters
         $parameters = array_merge($this->defaultParams, $parameters);
@@ -166,7 +169,7 @@ abstract class Ui
     public function action(string $actionName): self
     {
         return $this->setAttribute('name', 'hx__action')
-                    ->setAttribute('value', $actionName);
+            ->setAttribute('value', $actionName);
     }
 
     /**
@@ -366,7 +369,7 @@ abstract class Ui
             $this->afterRender($html);
             return $html;
         } catch (\Throwable $e) {
-            if (\ProcessWire\wire('config')->debug) {
+            if (wire('config')->debug) {
                 return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>{$e->getMessage()}</p></div>";
             }
             return '';

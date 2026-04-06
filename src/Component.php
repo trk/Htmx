@@ -2,10 +2,14 @@
 
 namespace Totoglu\Htmx;
 
+use ReflectionClass;
+use ReflectionNamedType;
+use ReflectionProperty;
 use ProcessWire\Htmx;
+use ProcessWire\Page;
+use ProcessWire\PageArray;
 use ProcessWire\WireData;
-
-use function ProcessWire\wire;
+use ProcessWire\WireException;
 
 /**
  * Component
@@ -53,7 +57,7 @@ abstract class Component extends WireData
      */
     public function fill(array $props): self
     {
-        $ref = new \ReflectionClass($this);
+        $ref = new ReflectionClass($this);
         foreach ($props as $k => $v) {
             if ($ref->hasProperty($k) && $ref->getProperty($k)->isPublic()) {
                 $this->{$k} = $v;
@@ -102,12 +106,12 @@ abstract class Component extends WireData
 
                         // 1. Replay Attack Protection Check
                         if (isset($decoded['__expires']) && time() > (int)$decoded['__expires']) {
-                            throw new \Exception("HTMX State Expired: This payload is no longer valid (Replay Protection).");
+                            throw new WireException("HTMX State Expired: This payload is no longer valid (Replay Protection).");
                         }
 
                         // 2. Cross-Component State Injection Protection
                         if (!isset($decoded['__cmp']) || $decoded['__cmp'] !== static::class) {
-                            throw new \Exception("HTMX Component Tampering Detected: State payload does not belong to this component.");
+                            throw new WireException("HTMX Component Tampering Detected: State payload does not belong to this component.");
                         }
 
                         // 3. Instance Identity Preservation
@@ -119,10 +123,10 @@ abstract class Component extends WireData
                         $this->mapStateToProperties($decoded);
                     }
                 } else {
-                    throw new \Exception("HTMX State Tampering Detected: Invalid HMAC signature.");
+                    throw new WireException("HTMX State Tampering Detected: Invalid HMAC signature.");
                 }
             } else {
-                throw new \Exception("HTMX State Format Invalid: Missing HMAC signature.");
+                throw new WireException("HTMX State Format Invalid: Missing HMAC signature.");
             }
         }
     }
@@ -189,7 +193,7 @@ abstract class Component extends WireData
             return false;
         }
 
-        $ref = new \ReflectionClass($this);
+        $ref = new ReflectionClass($this);
         if ($ref->hasMethod($action)) {
             $method = $ref->getMethod($action);
 
@@ -208,7 +212,7 @@ abstract class Component extends WireData
                     // 1. Dependency Injection for ProcessWire API Variables
                     // We prioritize object resolution and IGNORE user POST input for object hints
                     // to prevent TypeErrors or spoofing attacks.
-                    if ($type && $type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+                    if ($type && $type instanceof ReflectionNamedType && !$type->isBuiltin()) {
                         $className = $type->getName();
                         if (strpos($className, 'ProcessWire\\') === 0) {
                             $shortName = substr(strrchr('\\' . $className, '\\'), 1);
@@ -222,7 +226,7 @@ abstract class Component extends WireData
                         $val = $input->post($name);
 
                         // 3. Type-Safe Parameter Casting for scalar inputs
-                        if ($val !== null && $type && $type instanceof \ReflectionNamedType && $type->isBuiltin()) {
+                        if ($val !== null && $type && $type instanceof ReflectionNamedType && $type->isBuiltin()) {
                             $typeName = $type->getName();
                             $isArr = is_array($val);
 
@@ -262,8 +266,8 @@ abstract class Component extends WireData
     private function buildStateFromProperties(): array
     {
         $state = [];
-        $ref = new \ReflectionClass($this);
-        foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
+        $ref = new ReflectionClass($this);
+        foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
             $name = $prop->getName();
             // Skip uninitialized
             if (!$prop->isInitialized($this)) continue;
@@ -272,10 +276,10 @@ abstract class Component extends WireData
 
             // 1. ProcessWire Object Synthesis (Dehydration)
             if (is_object($val)) {
-                if ($val instanceof \ProcessWire\Page && $val->id) {
+                if ($val instanceof Page && $val->id) {
                     $state[$name] = ['__wire_model' => 'Page', 'id' => $val->id];
                     continue;
-                } elseif ($val instanceof \ProcessWire\PageArray && $val->count()) {
+                } elseif ($val instanceof PageArray && $val->count()) {
                     $state[$name] = ['__wire_model' => 'PageArray', 'ids' => $val->explode('id')];
                     continue;
                 } else {
@@ -299,7 +303,7 @@ abstract class Component extends WireData
      */
     private function mapStateToProperties(array $state): void
     {
-        $ref = new \ReflectionClass($this);
+        $ref = new ReflectionClass($this);
         foreach ($state as $k => $v) {
             // Internal metadata keys should never map to properties
             if (strpos($k, '__') === 0) continue;
@@ -351,7 +355,7 @@ abstract class Component extends WireData
     {
         if (!empty($this->view)) {
             // 1. Is it an OOP Ui Component?
-            if ($this->view instanceof \Totoglu\Htmx\Ui) {
+            if ($this->view instanceof Ui) {
                 // Pass State-Aware context to the Ui node
                 $this->view->component = $this;
                 return (string) $this->view;
@@ -373,8 +377,8 @@ abstract class Component extends WireData
                 if (is_file($file)) {
                     // Extract public properties so they are available as local variables in the view
                     $vars = ['component' => $this];
-                    $ref = new \ReflectionClass($this);
-                    foreach ($ref->getProperties(\ReflectionProperty::IS_PUBLIC) as $prop) {
+                    $ref = new ReflectionClass($this);
+                    foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
                         if ($prop->isInitialized($this)) {
                             $vars[$prop->getName()] = $prop->getValue($this);
                         }
