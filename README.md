@@ -226,6 +226,8 @@ HTMX operates heavily on headers to control browser actions. The `htmx` API vari
 
 ### Inspecting Requests
 
+*(Inside any `Component` or `Ui` class, you can access the API instantly via `$this->htmx` instead of using the global variable!)*
+
 ```php
 $htmx = wire('htmx');
 
@@ -336,6 +338,20 @@ To test the module functionality:
 4. If you want to explicitly test component bindings to specific pages, you can set the `$pageId` variable inside the script.
 
 These isolated checks help detect side-effects if you build structural configurations and dynamic ProcessWire template deployments that rely on `Htmx`.
+
+---
+
+## 🤖 AI-Assisted Development (`llms.txt`)
+
+This module adheres to a strict architectural standard designed to facilitate 0-hallucination AI generation. If you are using an AI assistant (like Cursor, GitHub Copilot, or Claude) to develop Components or UIs for this module, you should direct your AI to read the `llms.txt` file located in the root directory.
+
+AI assistants can ingest `llms.txt` to automatically understand:
+* The strict Component and Ui architecture.
+* The explicit rule to mutate `public` properties rather than using `setState()`.
+* How to properly dispatch `HTMX` headers for triggers and out-of-band swaps via `$this->htmx`.
+* Correct ProcessWire method signatures and dependencies.
+
+By referencing `llms.txt`, you ensure that AI outputs perfectly functional, secure, and production-ready `Htmx` code without framework confusion.
 
 ---
 

@@ -2,7 +2,10 @@
 
 namespace Totoglu\Htmx;
 
+use ProcessWire\Htmx;
 use ProcessWire\WireData;
+
+use function ProcessWire\wire;
 
 /**
  * Component
@@ -33,10 +36,16 @@ abstract class Component extends WireData
      */
     public string $id;
 
+    /**
+     * @var Htmx|null Quick access to the HTMX module API
+     */
+    protected ?Htmx $htmx = null;
+
     public function __construct()
     {
         parent::__construct();
         $this->id = uniqid(basename(str_replace('\\', '/', static::class)) . '-');
+        $this->htmx = $this->wire('htmx'); // Assign on construct for quick access
     }
 
     /**

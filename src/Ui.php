@@ -5,6 +5,7 @@ namespace Totoglu\Htmx;
 use Totoglu\Htmx\Bag\ParameterBag;
 use Totoglu\Htmx\Bag\AttributeBag;
 
+use function ProcessWire
 /**
  * Ui
  * 
@@ -32,8 +33,16 @@ abstract class Ui
     /** @var array<string, mixed> Default parameters automatically merged into the component */
     public array $defaultParams = [];
 
+    /**
+     * @var \ProcessWire\Htmx|null Quick access to the HTMX module API
+     */
+    protected ?\ProcessWire\Htmx $htmx = null;
+
     public function __construct(array $parameters = [], array $attributes = [])
     {
+        // Assign HTMX API instance
+        $this->htmx = \ProcessWire\wire('htmx');
+
         // Fallback default parameters
         $parameters = array_merge($this->defaultParams, $parameters);
 

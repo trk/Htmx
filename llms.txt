@@ -1,0 +1,99 @@
+---
+description: ProcessWire Htmx Module integration guide for agentic AI coding assistants. Complete API reference for Component, Ui, Request, Response, and Fragment.
+---
+# ProcessWire Htmx Module Guidelines for LLMs
+
+You are an agentic AI writing code for the `Totoglu\Htmx` module in ProcessWire. This is a custom component-based HTMX architecture. You MUST follow these rules exactly, as they deviate completely from React, Vue, or Livewire.
+
+## 1. Class Structure & Namespaces
+- **Stateful Components:** MUST reside in `site/components/`, use `namespace Htmx\Component;`, and `extend Totoglu\Htmx\Component`.
+- **Stateless UI Elements:** MUST reside in `site/ui/`, use `namespace Htmx\Ui;`, and `extend Totoglu\Htmx\Ui`.
+- Never mix these up.
+
+## 2. Stateful Components (`Totoglu\Htmx\Component`)
+Use this for business logic, DB queries, and view-level state.
+- **NO `setState()` or `update()`:** State is synchronized exclusively via `public` properties. Just mutate the variable (`$this->count = 5;`).
+- **NO `__construct()`:** Use `public function fill(array $props): self` for dependency injection and `public function mount(): void` for one-time initialization.
+- **Action Methods:** Define any public method (e.g., `increment()`). It gets executed automatically if triggered by an HTMX request mapping to `hx__action`.
+- **Hydration:** Public properties type-hinted with ProcessWire objects (like `Page`) are automatically collapsed to IDs in the DOM and re-fetched from the DB upon POST. You do not write boilerplate for this.
+- **Rendering:** `render(): string` must output HTML. Always pass `['__state' => $this->state(), 'hx__action' => 'actionName']` to a JSON encoded `hx-vals` attribute to maintain state during actions.
+
+### Example: Component
+```php
+namespace Htmx\Component;
+use Totoglu\Htmx\Component;
+
+class Counter extends Component {
+    public int $count = 0;
+    
+    // Auto-triggered by hx__action=increment
+    public function increment(): void {
+        $this->count++;
+        
+        // Example: HTMX specific functionality
+        $this->htmx->response->trigger('countUpdated', ['count' => $this->count]);
+        $this->htmx->fragment->addOobSwap('#header-counter', "<span id='header-counter'>{$this->count}</span>");
+    }
+
+    public function render(): string {
+        $vals = json_encode(['__state' => $this->state(), 'hx__action' => 'increment']);
+        return "
+        <div id='hxc_{$this->id()}'>
+            <button hx-post='./' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML' hx-vals='{$vals}'>
+                Count: {$this->count}
+            </button>
+        </div>";
+    }
+}
+```
+
+## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`)
+Use this for pure presentation (like atomic design elements: Button, Card, Notice).
+- **NO State/Public Properties:** Use the `public array $defaultParams` property instead.
+- **Props Resolution:** Access props via `$this->param('key')`.
+- **Attribute Management:** Use `$this->addClass('class')`, `$this->hx('post', '/url')` to modify attributes.
+- **Rendering Attributes:** You MUST echo `$this->attributes->render()` inside the root HTML node.
+- **Children:** Use `$this->param('text')` or render nested children via `$this->renderChildren()`.
+
+### Example: UI Element
+```php
+namespace Htmx\Ui;
+use Totoglu\Htmx\Ui;
+
+class Alert extends Ui {
+    public array $defaultParams = [ 'message' => 'Default alert', 'type' => 'info' ];
+
+    public function render(): string {
+        $this->addClass('p-4 rounded');
+        if ($this->param('type') === 'error') $this->addClass('bg-red-500');
+        
+        return "<div {$this->attributes->render()}>" . $this->param('message') . "</div>";
+    }
+}
+```
+
+## 4. HTMX Request & Response API
+Access via `$this->htmx` available anywhere in Component and Ui.
+
+### Request API (`$this->htmx->request`)
+- `isHtmx()`: bool (Is this an HX-Request?)
+- `isBoosted()`: bool
+- `target()`: string|null (ID of target element)
+- `prompt()`: string|null (Response to hx-prompt)
+
+### Response API (`$this->htmx->response`)
+- `redirect('/url')`: Client-side redirect via HX-Redirect.
+- `refresh()`: Full page refresh.
+- `trigger('eventName', ['data' => 1])`: Fire HX-Trigger events locally.
+- `retarget('#new-target')`: Change swap target dynamically.
+- `validationError('#target')`: Returns HTTP 422 to trigger extension errors.
+
+### Fragment API (Out-Of-Band Swaps) (`$this->htmx->fragment`)
+- `addOobSwap('#header', '<div>New Header</div>')`: Queue HTML to be swapped anywhere in the DOM alongside the component render. HTMX parses this transparently.
+- `addHyperscript('console.log("hello")')`: Run a hyperscript block out of band.
+
+## 5. Anti-Patterns
+- 🚫 `public function __construct()` -> BAD! Use `public function fill(array $props): self` / `public function mount(): void`.
+- 🚫 `$this->setState(['foo' => 'bar']);` -> BAD! `setState` does not exist. Do `$this->foo = 'bar';`.
+- 🚫 Echoing plain strings in UI elements instead of `$this->attributes->render()`.
+- 🚫 Putting DB logic in `Totoglu\Htmx\Ui`. Put it in `Totoglu\Htmx\Component`.
