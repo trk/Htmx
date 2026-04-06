@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Totoglu\Htmx;
 
 use ProcessWire\Htmx;
@@ -40,16 +42,22 @@ abstract class Ui
      */
     protected ?Htmx $htmx = null;
 
-    public function __construct(array $parameters = [], array $attributes = [])
+    public function __construct(array|ParameterBag $parameters = [], array|AttributeBag $attributes = [])
     {
         // Assign HTMX API instance
         $this->htmx = wire('htmx');
 
-        // Fallback default parameters
-        $parameters = array_merge($this->defaultParams, $parameters);
+        // Handle parameters
+        $this->parameters = $parameters instanceof ParameterBag 
+            ? $parameters 
+            : new ParameterBag($parameters);
 
-        $this->parameters = new ParameterBag($parameters);
-        $this->attributes = new AttributeBag($attributes);
+        $this->parameters->defaults($this->defaultParams);
+
+        // Handle attributes
+        $this->attributes = $attributes instanceof AttributeBag 
+            ? $attributes 
+            : new AttributeBag($attributes);
     }
 
     /**

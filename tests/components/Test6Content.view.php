@@ -1,7 +1,11 @@
 <div class="uk-card uk-card-default uk-card-body" id="test6">
     <h3 class="uk-card-title">Test 6: Content (HTML Textarea, File View)</h3>
     
-    <?php if ($message): ?>
+    <?php
+
+declare(strict_types=1);
+
+if ($message): ?>
         <div class="uk-alert uk-alert-success"><p><?= htmlspecialchars($message, ENT_QUOTES, 'UTF-8') ?></p></div>
     <?php endif; ?>
 

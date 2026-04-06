@@ -266,7 +266,7 @@ $htmx->fragment->addOobSwap('#header-cart', '<span>3</span>');
 
 ## 🌲 Object-Oriented UI Components (`Ui` Base Class)
 
-Beyond HTMX requests, this module ships with a powerful `Ui` class modeling a programmatic DOM architecture for building reusable presentation logic.
+Beyond HTMX requests, this module ships with a powerful `Ui` class modeling a programmatic DOM architecture for building reusable presentation logic. State and attributes are decoupled and maintained robustly using fluent `ParameterBag` and `AttributeBag` utilities.
 
 ```php
 use Totoglu\Htmx\Ui;
@@ -275,8 +275,8 @@ class Modal extends Ui {
     public string $name = 'modal-widget';
 
     public function render(): string {
-        // Fluent attribute generator and XSS escaping natively
-        $title = $this->esc($this->param('title', 'Default Title'));
+        // Safe, strict-typed fluent parameter generation natively
+        $title = $this->esc($this->parameters->getString('title', 'Default Title'));
 
         return "
         <div {$this->attributes->render()}>
@@ -290,11 +290,11 @@ class Modal extends Ui {
 }
 
 $modal = new Modal([
-    'title' => 'Warning!',
-    'id' => 'alert-modal'
+    'title' => 'Warning!'
 ]);
 
-// Easily add syntactic HTMX attributes on the fly
+// Easily add syntactic HTMX attributes or classes natively without messy string concats
+$modal->attributes->addClass('uk-modal-dialog')->id('alert-modal');
 $modal->hx('get', '/process/')->hx('target', '.content');
 
 echo $modal->render();

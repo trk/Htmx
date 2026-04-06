@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Htmx\Component;
 
 use Totoglu\Htmx\Component;

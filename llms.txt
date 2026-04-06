@@ -16,7 +16,8 @@ Use this for business logic, DB queries, and view-level state.
 - **NO `__construct()`:** Use `public function fill(array $props): self` for dependency injection and `public function mount(): void` for one-time initialization.
 - **Action Methods:** Define any public method (e.g., `increment()`). It gets executed automatically if triggered by an HTMX request mapping to `hx__action`.
 - **Hydration:** Public properties type-hinted with ProcessWire objects (like `Page`) are automatically collapsed to IDs in the DOM and re-fetched from the DB upon POST. You do not write boilerplate for this.
-- **Rendering:** `render(): string` must output HTML. Always pass `['__state' => $this->state(), 'hx__action' => 'actionName']` to a JSON encoded `hx-vals` attribute to maintain state during actions.
+- **Rendering:** `render(): string` must output HTML. Always echo `$this->renderStatePayload()` inside your component (e.g. inside a `<form>` or a container that is included via `hx-include`) to maintain state securely via HMAC signatures and replay protection.
+- **Routing:** Use `$this->requestUrl()` for the `hx-post` URL. The Htmx module automatically routes requests to your namespaced components. Actions (mutations) MUST be sent via POST.
 
 ### Example: Component
 ```php
@@ -26,7 +27,7 @@ use Totoglu\Htmx\Component;
 class Counter extends Component {
     public int $count = 0;
     
-    // Auto-triggered by hx__action=increment
+    // Auto-triggered by POST request with hx__action=increment
     public function increment(): void {
         $this->count++;
         
@@ -36,12 +37,17 @@ class Counter extends Component {
     }
 
     public function render(): string {
-        $vals = json_encode(['__state' => $this->state(), 'hx__action' => 'increment']);
+        // Pass the action name via hx-vals
+        $vals = json_encode(['hx__action' => 'increment']);
+        
         return "
         <div id='hxc_{$this->id()}'>
-            <button hx-post='./' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML' hx-vals='{$vals}'>
-                Count: {$this->count}
-            </button>
+            <form hx-post='{$this->requestUrl()}' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML' hx-vals='{$vals}'>
+                {$this->renderStatePayload()}
+                <button type='submit'>
+                    Count: {$this->count}
+                </button>
+            </form>
         </div>";
     }
 }
@@ -50,10 +56,10 @@ class Counter extends Component {
 ## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`)
 Use this for pure presentation (like atomic design elements: Button, Card, Notice).
 - **NO State/Public Properties:** Use the `public array $defaultParams` property instead.
-- **Props Resolution:** Access props via `$this->param('key')`.
-- **Attribute Management:** Use `$this->addClass('class')`, `$this->hx('post', '/url')` to modify attributes.
+- **Parameter Management (`ParameterBag`):** Access props safely using strict typed methods off `$this->parameters` e.g. `getString('key')`, `getInt('key')`, `getBool('key')`, `getArray('key')`. Quick mixed access is available via `$this->param('key')`.
+- **Attribute Management (`AttributeBag`):** Modifying HTML attributes is fluent and powerful tracking unique keys. Example: `$this->attributes->addClass('active')->removeClass('hidden')->toggleClass('uk-open', true)->id('my-id')`. Additionally use `$this->hx('post', '/url')` or `$this->data('value', 5)` for easy attribute bindings.
 - **Rendering Attributes:** You MUST echo `$this->attributes->render()` inside the root HTML node.
-- **Children:** Use `$this->param('text')` or render nested children via `$this->renderChildren()`.
+- **Children:** Render nested children via `$this->renderChildren()`.
 
 ### Example: UI Element
 ```php

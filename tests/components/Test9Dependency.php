@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Htmx\Component;
 
 use Totoglu\Htmx\Component;
@@ -11,8 +14,8 @@ class Test9Dependency extends Component
 
     public function mount(): void
     {
-        if ($this->testPage === null && $this->param('testPage') instanceof Page) {
-            $this->testPage = $this->param('testPage');
+        if ($this->testPage === null && $this->parameters->get('testPage') instanceof Page) {
+            $this->testPage = $this->parameters->get('testPage');
         }
     }
 

@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Htmx\Ui;
 
 use Totoglu\Htmx\Ui;
@@ -23,20 +25,20 @@ class Button extends Ui
             'success' => 'bg-green-600 text-white hover:bg-green-700',
         ];
 
-        $variantClass = $variants[$this->param('variant')] ?? $variants['primary'];
+        $variantClass = $variants[$this->parameters->getString('variant')] ?? $variants['primary'];
 
         // Base classes
         $baseClass = "px-4 py-2 rounded shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200 {$variantClass}";
 
         // Apply classes
-        $this->addClass($baseClass);
+        $this->attributes->addClass($baseClass);
 
         return sprintf(
             '<%s %s>%s</%s>',
-            $this->param('tag'),
+            $this->parameters->getString('tag'),
             $this->attributes->render(),
-            $this->param('label'),
-            $this->param('tag')
+            $this->parameters->getString('label'),
+            $this->parameters->getString('tag')
         );
     }
 }
