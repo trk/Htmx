@@ -32,38 +32,30 @@ jobs:
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      - name: Build Changelog
+        id: build_changelog
+        uses: mikepenz/release-changelog-builder-action@v5
+        with:
+          commitMode: true
+          toTag: "v${{ steps.get_version.outputs.version }}"
+          configurationJson: |
+            {
+              "template": "## What's Changed\n#{{UNCATEGORIZED}}\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/#{{PREV_TAG}}...#{{NEXT_TAG}}",
+              "commit_template": "* #{{TITLE}} by @#{{AUTHOR}} in #{{HASH}}",
+              "empty_template": "* No changes detected"
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Git Tag and GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
+          CHANGELOG: ${{ steps.build_changelog.outputs.changelog }}
         run: |
           TAG="v${{ steps.get_version.outputs.version }}"
           echo "Generated Tag: $TAG"
           git tag $TAG
           git push origin $TAG
           
-          # Find the previous tag mapping to the current branch
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          
-          echo "## What's Changed" > release_notes.md
-          if [ -n "$PREV_TAG" ]; then
-            git log --format="* %s by **%an** in %h" $PREV_TAG..HEAD >> release_notes.md
-            echo "" >> release_notes.md
-            
-            echo "## Contributors" >> release_notes.md
-            git log --format="* %an" $PREV_TAG..HEAD | awk '!seen[$0]++' >> release_notes.md
-            echo "" >> release_notes.md
-            
-            echo "**Full Changelog**: https://github.com/$REPO/compare/$PREV_TAG...$TAG" >> release_notes.md
-          else
-            git log --format="* %s by **%an** in %h" HEAD >> release_notes.md
-            echo "" >> release_notes.md
-            
-            echo "## Contributors" >> release_notes.md
-            git log --format="* %an" HEAD | awk '!seen[$0]++' >> release_notes.md
-            echo "" >> release_notes.md
-            
-            echo "**Full Changelog**: https://github.com/$REPO/commits/$TAG" >> release_notes.md
-          fi
-          
+          echo "$CHANGELOG" > release_notes.md
           gh release create $TAG -F release_notes.md
