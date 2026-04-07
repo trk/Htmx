@@ -105,7 +105,7 @@ jobs:
                 SEEN_AUTHORS+=("$LOGIN")
                 
                 if [ -n "$AVATAR" ]; then
-                   ITEM="<img src=\"$AVATAR\" width=\"24\" height=\"24\" style=\"border-radius: 50%; vertical-align: middle;\" alt=\"$LOGIN\"> $LOGIN"
+                   ITEM="<img src=\"$AVATAR\" width=\"24\" height=\"24\" style=\"border-radius: 50%; vertical-align: middle;\" alt=\"\"> $LOGIN"
                 else
                    ITEM="$LOGIN"
                 fi
