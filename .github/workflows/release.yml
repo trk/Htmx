@@ -120,9 +120,5 @@ jobs:
           
           echo "" >> release_notes.md
           echo "**Full Changelog**: $COMPARE_URL" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "## Contributors" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "$CONTRIBUTORS_HTML" >> release_notes.md
           
           gh release create $TAG -F release_notes.md --title "$TAG"
