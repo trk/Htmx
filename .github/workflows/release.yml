@@ -32,6 +32,13 @@ jobs:
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      - name: Create Git Tag
+        run: |
+          TAG="v${{ steps.get_version.outputs.version }}"
+          echo "Generated Tag: $TAG"
+          git tag $TAG
+          git push origin $TAG
+
       - name: Build Changelog
         id: build_changelog
         uses: mikepenz/release-changelog-builder-action@v5
@@ -40,22 +47,18 @@ jobs:
           toTag: "v${{ steps.get_version.outputs.version }}"
           configurationJson: |
             {
-              "template": "## What's Changed\n#{{UNCATEGORIZED}}\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/#{{PREV_TAG}}...#{{NEXT_TAG}}",
+              "template": "## What's Changed\n#{{CHANGES}}\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/#{{PREV_TAG}}...#{{NEXT_TAG}}",
               "commit_template": "* #{{TITLE}} by @#{{AUTHOR}} in #{{HASH}}",
               "empty_template": "* No changes detected"
             }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create Git Tag and GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANGELOG: ${{ steps.build_changelog.outputs.changelog }}
         run: |
           TAG="v${{ steps.get_version.outputs.version }}"
-          echo "Generated Tag: $TAG"
-          git tag $TAG
-          git push origin $TAG
-          
           echo "$CHANGELOG" > release_notes.md
           gh release create $TAG -F release_notes.md
