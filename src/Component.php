@@ -254,7 +254,11 @@ abstract class Component extends WireData
                     $args[] = $val;
                 }
 
-                $method->invokeArgs($this, $args);
+                $result = $method->invokeArgs($this, $args);
+                if (is_string($result) && $result !== '') {
+                    $this->view = $result;
+                }
+                
                 return true;
             }
         }
