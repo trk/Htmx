@@ -74,8 +74,7 @@ jobs:
           fi
           
           SEEN_AUTHORS=()
-          AVATARS=""
-          CONTRIBUTORS_TEXT=""
+          CONTRIBUTORS_HTML=""
           
           for SHA in $COMMITS; do
              TITLE=$(git log --format="%s" -n 1 $SHA)
@@ -88,9 +87,9 @@ jobs:
              AVATAR=$(gh api repos/$REPO/commits/$SHA --jq '.author.avatar_url // empty' 2>/dev/null || echo "")
              
              if [[ "$LOGIN" == *" "* ]]; then
-               echo "* $TITLE by **$LOGIN** in $SHORT_SHA" >> release_notes.md
+               echo "* $TITLE by **$LOGIN** in \`$SHORT_SHA\`" >> release_notes.md
              else
-               echo "* $TITLE by @$LOGIN in $SHORT_SHA" >> release_notes.md
+               echo "* $TITLE by @$LOGIN in \`$SHORT_SHA\`" >> release_notes.md
              fi
              
              # Check if seen
@@ -104,28 +103,26 @@ jobs:
              
              if [ "$SEEN" = false ]; then
                 SEEN_AUTHORS+=("$LOGIN")
-                if [[ "$LOGIN" != *" "* ]]; then
-                   CONTRIBUTORS_TEXT="$CONTRIBUTORS_TEXT, @$LOGIN"
-                else
-                   CONTRIBUTORS_TEXT="$CONTRIBUTORS_TEXT, $LOGIN"
-                fi
+                
                 if [ -n "$AVATAR" ]; then
-                   AVATARS="$AVATARS<a href=\"https://github.com/$LOGIN\"><img src=\"$AVATAR\" width=\"32\" height=\"32\" style=\"border-radius: 50%;\" alt=\"@$LOGIN\"></a> "
+                   ITEM="<img src=\"$AVATAR\" width=\"24\" height=\"24\" style=\"border-radius: 50%; vertical-align: middle;\" alt=\"$LOGIN\"> $LOGIN"
+                else
+                   ITEM="$LOGIN"
+                fi
+                
+                if [ -z "$CONTRIBUTORS_HTML" ]; then
+                   CONTRIBUTORS_HTML="$ITEM"
+                else
+                   CONTRIBUTORS_HTML="$CONTRIBUTORS_HTML, $ITEM"
                 fi
              fi
           done
-          
-          CONTRIBUTORS_TEXT=$(echo "$CONTRIBUTORS_TEXT" | sed 's/^, //')
           
           echo "" >> release_notes.md
           echo "**Full Changelog**: $COMPARE_URL" >> release_notes.md
           echo "" >> release_notes.md
           echo "## Contributors" >> release_notes.md
           echo "" >> release_notes.md
-          if [ -n "$AVATARS" ]; then
-             echo "$AVATARS" >> release_notes.md
-             echo "" >> release_notes.md
-          fi
-          echo "$CONTRIBUTORS_TEXT" >> release_notes.md
+          echo "$CONTRIBUTORS_HTML" >> release_notes.md
           
           gh release create $TAG -F release_notes.md --title "$TAG"
