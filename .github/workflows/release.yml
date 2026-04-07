@@ -23,8 +23,8 @@ jobs:
 
       - name: Configure Git User
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
 
       - name: Extract module version
         id: get_version
