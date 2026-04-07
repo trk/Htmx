@@ -5,6 +5,8 @@ on:
       - main
     paths:
       - "Htmx.module.php"
+  workflow_dispatch:
+
 jobs:
   tag_and_release:
     runs-on: ubuntu-latest
@@ -12,15 +14,18 @@ jobs:
       VERSION_FILE: "Htmx.module.php"
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Configure Git User
         run: |
           git config user.name "GitHub Actions"
           git config user.email "github-actions@github.com"
+
       - name: Extract module version
         id: get_version
         run: |
@@ -32,33 +37,27 @@ jobs:
           fi
 
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-      - name: Create Git Tag
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          TAG="v${{ steps.get_version.outputs.version }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists on remote. Skipping release."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Git Tag and GitHub Release
+        if: steps.check_tag.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="v${{ steps.get_version.outputs.version }}"
           echo "Generated Tag: $TAG"
           git tag $TAG
           git push origin $TAG
-
-      - name: Build Changelog
-        id: build_changelog
-        uses: mikepenz/release-changelog-builder-action@v5
-        with:
-          commitMode: true
-          toTag: "v${{ steps.get_version.outputs.version }}"
-          configurationJson: |
-            {
-              "template": "## What's Changed\n#{{CHANGES}}\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/#{{PREV_TAG}}...#{{NEXT_TAG}}",
-              "commit_template": "* #{{TITLE}} by @#{{AUTHOR}} in #{{HASH}}",
-              "empty_template": "* No changes detected"
-            }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHANGELOG: ${{ steps.build_changelog.outputs.changelog }}
-        run: |
-          TAG="v${{ steps.get_version.outputs.version }}"
-          echo "$CHANGELOG" > release_notes.md
-          gh release create $TAG -F release_notes.md
+          
+          echo "Generating GitHub Release notes natively..."
+          gh release create $TAG --generate-notes --title "v${{ steps.get_version.outputs.version }}"
