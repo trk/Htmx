@@ -35,9 +35,35 @@ jobs:
       - name: Create Git Tag and GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           TAG="v${{ steps.get_version.outputs.version }}"
           echo "Generated Tag: $TAG"
           git tag $TAG
           git push origin $TAG
-          gh release create $TAG --generate-notes
+          
+          # Find the previous tag mapping to the current branch
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          echo "## What's Changed" > release_notes.md
+          if [ -n "$PREV_TAG" ]; then
+            git log --format="* %s by **%an** in %h" $PREV_TAG..HEAD >> release_notes.md
+            echo "" >> release_notes.md
+            
+            echo "## Contributors" >> release_notes.md
+            git log --format="* %an" $PREV_TAG..HEAD | awk '!seen[$0]++' >> release_notes.md
+            echo "" >> release_notes.md
+            
+            echo "**Full Changelog**: https://github.com/$REPO/compare/$PREV_TAG...$TAG" >> release_notes.md
+          else
+            git log --format="* %s by **%an** in %h" HEAD >> release_notes.md
+            echo "" >> release_notes.md
+            
+            echo "## Contributors" >> release_notes.md
+            git log --format="* %an" HEAD | awk '!seen[$0]++' >> release_notes.md
+            echo "" >> release_notes.md
+            
+            echo "**Full Changelog**: https://github.com/$REPO/commits/$TAG" >> release_notes.md
+          fi
+          
+          gh release create $TAG -F release_notes.md
