@@ -87,9 +87,9 @@ jobs:
              AVATAR=$(gh api repos/$REPO/commits/$SHA --jq '.author.avatar_url // empty' 2>/dev/null || echo "")
              
              if [[ "$LOGIN" == *" "* ]]; then
-               echo "* $TITLE by **$LOGIN** in \`$SHORT_SHA\`" >> release_notes.md
+               echo "* $TITLE by **$LOGIN** in $SHORT_SHA" >> release_notes.md
              else
-               echo "* $TITLE by @$LOGIN in \`$SHORT_SHA\`" >> release_notes.md
+               echo "* $TITLE by @$LOGIN in $SHORT_SHA" >> release_notes.md
              fi
              
              # Check if seen
