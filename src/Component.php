@@ -449,6 +449,9 @@ abstract class Component extends WireData
 
             return $html;
         } catch (\Throwable $e) {
+            if ($this->wire('config')->debug) {
+                return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine(), ENT_QUOTES, 'UTF-8') . "\nStack Trace:\n" . htmlspecialchars($e->getTraceAsString(), ENT_QUOTES, 'UTF-8') . " -->";
+            }
             return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
         }
     }
