@@ -99,7 +99,12 @@ Access via `$this->htmx` available anywhere in Component and Ui.
 - `addOobSwap('#header', '<div>New Header</div>')`: Queue HTML to be swapped anywhere in the DOM alongside the component render. HTMX parses this transparently.
 - `addHyperscript('console.log("hello")')`: Run a hyperscript block out of band.
 
-## 5. Anti-Patterns
+## 5. CLI Scaffolding
+Always use the ProcessWire Console to scaffold new UI elements or Components. This ensures proper boilerplate and namespaces are created safely.
+- `php vendor/bin/wire make:htmx-component {Name} [--dir={CustomRelativePath}]`
+- `php vendor/bin/wire make:htmx-ui {Name} [--dir={CustomRelativePath}]`
+
+## 6. Anti-Patterns
 - 🚫 `public function __construct()` -> BAD! Use `public function fill(array $props): self` / `public function mount(): void`.
 - 🚫 `$this->setState(['foo' => 'bar']);` -> BAD! `setState` does not exist. Do `$this->foo = 'bar';`.
 - 🚫 Echoing plain strings in UI elements instead of `$this->attributes->render()`.
