@@ -330,19 +330,19 @@ The module includes integration with `processwire-console` to easily generate bo
 
 **Generate a Stateful Component:**
 ```bash
-php vendor/bin/wire make:htmx-component Auth/LoginModal
+php vendor/bin/wire make:htmx:component Auth/LoginModal
 ```
 *(By default, this generates `site/components/Auth/LoginModal.php` based on your module settings)*
 
 **Generate a Stateless Ui Element:**
 ```bash
-php vendor/bin/wire make:htmx-ui Card/Header
+php vendor/bin/wire make:htmx:ui Card/Header
 ```
 *(Generates `site/ui/Card/Header.php`)*
 
 You can also override the destination directory on the fly using the `--dir` option (useful for packing components inside independent modules):
 ```bash
-php vendor/bin/wire make:htmx-ui Card/Header --dir=site/modules/MyCustomModule/ui
+php vendor/bin/wire make:htmx:ui Card/Header --dir=site/modules/MyCustomModule/ui
 ```
 
 ---
@@ -362,17 +362,17 @@ These isolated checks help detect side-effects if you build structural configura
 
 ---
 
-## 🤖 AI-Assisted Development (`llms.txt`)
+## 🤖 AI-Assisted Development (`AGENTS.md`)
 
-This module adheres to a strict architectural standard designed to facilitate 0-hallucination AI generation. If you are using an AI assistant (like Cursor, GitHub Copilot, or Claude) to develop Components or UIs for this module, you should direct your AI to read the `llms.txt` file located in the root directory.
+This module adheres to a strict architectural standard designed to facilitate 0-hallucination AI generation. If you are using an AI assistant (like Cursor, GitHub Copilot, or Claude) to develop Components or UIs for this module, you should direct your AI to read the `AGENTS.md` file located in the root directory.
 
-AI assistants can ingest `llms.txt` to automatically understand:
+AI assistants can ingest `AGENTS.md` to automatically understand:
 * The strict Component and Ui architecture.
 * The explicit rule to mutate `public` properties rather than using `setState()`.
 * How to properly dispatch `HTMX` headers for triggers and out-of-band swaps via `$this->htmx`.
 * Correct ProcessWire method signatures and dependencies.
 
-By referencing `llms.txt`, you ensure that AI outputs perfectly functional, secure, and production-ready `Htmx` code without framework confusion.
+By referencing `AGENTS.md`, you ensure that AI outputs perfectly functional, secure, and production-ready `Htmx` code without framework confusion.
 
 ---
 
