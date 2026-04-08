@@ -1,0 +1,39 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Totoglu\Htmx\Component;
+
+class {{className}} extends Component
+{
+    public function mount(): void
+    {
+        // One-time initialization logic
+    }
+
+    public function fill(array $props): self
+    {
+        // Dependency injection logic
+        return $this;
+    }
+
+    public function render(): string
+    {
+        // Use hx-vals to pass the action method you want to trigger
+        // $vals = json_encode(['hx__action' => 'yourAction']);
+
+        return "
+        <div id='hxc_{$this->id()}'>
+            <form hx-post='{$this->requestUrl()}' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML'>
+                {$this->renderStatePayload()}
+                
+                <div>
+                    <!-- Your component markup here -->
+                    Hello {{className}} Component!
+                </div>
+            </form>
+        </div>";
+    }
+}

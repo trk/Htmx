@@ -1,0 +1,24 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{namespace}};
+
+use Totoglu\Htmx\Ui;
+
+class {{className}} extends Ui
+{
+    public string $name = '{{slug}}';
+
+    public array $defaultParams = [
+        // 'message' => 'Default message',
+    ];
+
+    public function render(): string
+    {
+        return "<div {$this->attributes->render()}>
+            <!-- Your UI markup here -->
+            {$this->renderChildren()}
+        </div>";
+    }
+}
