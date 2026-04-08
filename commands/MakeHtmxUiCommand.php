@@ -14,12 +14,11 @@ use function ProcessWire\wire;
 
 class MakeHtmxUiCommand extends Command
 {
-    protected static $defaultName = 'make:htmx:ui';
-    protected static $defaultDescription = 'Scaffold a new Htmx Ui element.';
-
     protected function configure(): void
     {
         $this
+            ->setName('make:htmx:ui')
+            ->setDescription('Scaffold a new Htmx Ui element.')
             ->addArgument('name', InputArgument::REQUIRED, 'The name of the Ui element (e.g. CardHeader or Forms/Input)')
             ->addOption('dir', 'd', InputOption::VALUE_REQUIRED, 'Relative path under site/ directory to store the element (overrides module settings)');
     }

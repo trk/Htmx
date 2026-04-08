@@ -14,12 +14,11 @@ use function ProcessWire\wire;
 
 class MakeHtmxComponentCommand extends Command
 {
-    protected static $defaultName = 'make:htmx:component';
-    protected static $defaultDescription = 'Scaffold a new Htmx Component.';
-
     protected function configure(): void
     {
         $this
+            ->setName('make:htmx:component')
+            ->setDescription('Scaffold a new Htmx Component.')
             ->addArgument('name', InputArgument::REQUIRED, 'The name of the Component (e.g. Counter or Dashboard/Counter)')
             ->addOption('dir', 'd', InputOption::VALUE_REQUIRED, 'Relative path under site/ directory to store the element (overrides module settings)');
     }
