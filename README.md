@@ -324,6 +324,29 @@ With **Auto Target Extraction** enabled, if the browser requests a specific `#ta
 
 ---
 
+## 🛠️ CLI Scaffolding Commands
+
+The module includes integration with `processwire-console` to easily generate boilerplate code for your Components and Ui elements.
+
+**Generate a Stateful Component:**
+```bash
+php vendor/bin/wire make:htmx-component Auth/LoginModal
+```
+*(By default, this generates `site/components/Auth/LoginModal.php` based on your module settings)*
+
+**Generate a Stateless Ui Element:**
+```bash
+php vendor/bin/wire make:htmx-ui Card/Header
+```
+*(Generates `site/ui/Card/Header.php`)*
+
+You can also override the destination directory on the fly using the `--dir` option (useful for packing components inside independent modules):
+```bash
+php vendor/bin/wire make:htmx-ui Card/Header --dir=site/modules/MyCustomModule/ui
+```
+
+---
+
 ## 🧪 Testing and Verification
 
 The module ships with an automated architectural checking script alongside sample components (`Counter`, `Form`, `UiObject`, etc.) required for ensuring compatibility across environments. These are kept in an isolated `tests/` directory.
