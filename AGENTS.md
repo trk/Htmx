@@ -1,5 +1,5 @@
 ---
-description: ProcessWire Htmx Module integration guide for agentic AI coding assistants. Complete API reference for Component, Ui, Request, Response, and Fragment.
+description: "Use when working with Totoglu\\Htmx Components, Ui elements, HTMX swaps, OOB fragments, or state payload management. Complete API reference."
 ---
 # ProcessWire Htmx Module Guidelines for LLMs
 
