@@ -101,8 +101,8 @@ Access via `$this->htmx` available anywhere in Component and Ui.
 
 ## 5. CLI Scaffolding
 Always use the ProcessWire Console to scaffold new UI elements or Components. This ensures proper boilerplate and namespaces are created safely.
-- `php vendor/bin/wire make:htmx-component {Name} [--dir={CustomRelativePath}]`
-- `php vendor/bin/wire make:htmx-ui {Name} [--dir={CustomRelativePath}]`
+- `php vendor/bin/wire make:htmx:component {Name} [--dir={CustomRelativePath}]`
+- `php vendor/bin/wire make:htmx:ui {Name} [--dir={CustomRelativePath}]`
 
 ## 6. Anti-Patterns
 - 🚫 `public function __construct()` -> BAD! Use `public function fill(array $props): self` / `public function mount(): void`.

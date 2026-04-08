@@ -9,7 +9,9 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Console\Style\SymfonyStyle;
+use function Laravel\Prompts\error;
+use function Laravel\Prompts\info;
+use function Laravel\Prompts\note;
 use function ProcessWire\wire;
 
 class MakeHtmxUiCommand extends Command
@@ -25,8 +27,6 @@ class MakeHtmxUiCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $io = new SymfonyStyle($input, $output);
-        
         $nameInput = trim(str_replace('\\', '/', (string)$input->getArgument('name')), '/');
         $parts = explode('/', $nameInput);
         $className = array_pop($parts);
@@ -35,7 +35,7 @@ class MakeHtmxUiCommand extends Command
         // Get module config
         $htmxModule = wire('modules')->get('Htmx');
         $baseDir = $input->getOption('dir');
-        
+
         if (!$baseDir) {
             $baseDir = $htmxModule ? trim($htmxModule->uiPath ?: 'ui/', '/') : 'ui';
         } else {
@@ -51,7 +51,7 @@ class MakeHtmxUiCommand extends Command
         $targetFile = $targetDir . '/' . $className . '.php';
 
         if (file_exists($targetFile)) {
-            $io->error("Ui element '{$className}' already exists at {$targetFile}");
+            error("Ui element '{$className}' already exists at {$targetFile}");
             return Command::FAILURE;
         }
 
@@ -71,7 +71,7 @@ class MakeHtmxUiCommand extends Command
 
         $stubPath = __DIR__ . '/stubs/htmx-ui.stub';
         if (!file_exists($stubPath)) {
-            $io->error("Stub file not found at {$stubPath}");
+            error("Stub file not found at {$stubPath}");
             return Command::FAILURE;
         }
 
@@ -83,8 +83,8 @@ class MakeHtmxUiCommand extends Command
         );
 
         file_put_contents($targetFile, $content);
-        $io->success("Htmx Ui element '{$className}' scaffolded successfully at:");
-        $io->note(str_replace($sitePath, 'site/', $targetFile));
+        info("Htmx Ui element '{$className}' scaffolded successfully at:");
+        note(str_replace($sitePath, 'site/', $targetFile));
 
         return Command::SUCCESS;
     }
