@@ -312,7 +312,7 @@ abstract class Component extends WireData
         $ref = new ReflectionClass($this);
         foreach ($state as $k => $v) {
             // Internal metadata keys should never map to properties
-            if (strpos($k, '__') === 0) continue;
+            if (is_string($k) && strpos($k, '__') === 0) continue;
 
             if ($ref->hasProperty($k)) {
                 $prop = $ref->getProperty($k);

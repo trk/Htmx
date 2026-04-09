@@ -326,7 +326,7 @@ HTML;
         } catch (\Throwable $ex) {
             http_response_code(500);
             if ($this->wire('config')->debug) {
-                return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+                return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " in " . $ex->getFile() . ":" . $ex->getLine() . " -->";
             }
             return "Internal Server Error";
         }
