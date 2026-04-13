@@ -1,17 +1,22 @@
 ---
 description: "Use when working with Totoglu\\Htmx Components, Ui elements, HTMX swaps, OOB fragments, or state payload management. Complete API reference."
 ---
+
 # ProcessWire Htmx Module Guidelines for LLMs
 
 You are an agentic AI writing code for the `Totoglu\Htmx` module in ProcessWire. This is a custom component-based HTMX architecture. You MUST follow these rules exactly, as they deviate completely from React, Vue, or Livewire.
 
 ## 1. Class Structure & Namespaces
+
 - **Stateful Components:** MUST reside in `site/components/`, use `namespace Htmx\Component;`, and `extend Totoglu\Htmx\Component`.
 - **Stateless UI Elements:** MUST reside in `site/ui/`, use `namespace Htmx\Ui;`, and `extend Totoglu\Htmx\Ui`.
-- Never mix these up.
+- **Module-Bundled Components:** Modules that declare `'requires' => ['Htmx']` and have `components/` and/or `ui/` directories are auto-discovered. No manual `registerComponent()` needed.
+- Never mix stateful and stateless patterns.
 
 ## 2. Stateful Components (`Totoglu\Htmx\Component`)
+
 Use this for business logic, DB queries, and view-level state.
+
 - **NO `setState()` or `update()`:** State is synchronized exclusively via `public` properties. Just mutate the variable (`$this->count = 5;`).
 - **NO `__construct()`:** Use `public function fill(array $props): self` for dependency injection and `public function mount(): void` for one-time initialization.
 - **Action Methods:** Define any public method (e.g., `increment()`). It gets executed automatically if triggered by an HTMX request mapping to `hx__action`.
@@ -20,17 +25,18 @@ Use this for business logic, DB queries, and view-level state.
 - **Routing:** Use `$this->requestUrl()` for the `hx-post` URL. The Htmx module automatically routes requests to your namespaced components. Actions (mutations) MUST be sent via POST.
 
 ### Example: Component
+
 ```php
 namespace Htmx\Component;
 use Totoglu\Htmx\Component;
 
 class Counter extends Component {
     public int $count = 0;
-    
+
     // Auto-triggered by POST request with hx__action=increment
     public function increment(): void {
         $this->count++;
-        
+
         // Example: HTMX specific functionality
         $this->htmx->response->trigger('countUpdated', ['count' => $this->count]);
         $this->htmx->fragment->addOobSwap('#header-counter', "<span id='header-counter'>{$this->count}</span>");
@@ -39,7 +45,7 @@ class Counter extends Component {
     public function render(): string {
         // Pass the action name via hx-vals
         $vals = json_encode(['hx__action' => 'increment']);
-        
+
         return "
         <div id='hxc_{$this->id()}'>
             <form hx-post='{$this->requestUrl()}' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML' hx-vals='{$vals}'>
@@ -54,7 +60,9 @@ class Counter extends Component {
 ```
 
 ## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`)
+
 Use this for pure presentation (like atomic design elements: Button, Card, Notice).
+
 - **NO State/Public Properties:** Use the `public array $defaultParams` property instead.
 - **Parameter Management (`ParameterBag`):** Access props safely using strict typed methods off `$this->parameters` e.g. `getString('key')`, `getInt('key')`, `getBool('key')`, `getArray('key')`. Quick mixed access is available via `$this->param('key')`.
 - **Attribute Management (`AttributeBag`):** Modifying HTML attributes is fluent and powerful tracking unique keys. Example: `$this->attributes->addClass('active')->removeClass('hidden')->toggleClass('uk-open', true)->id('my-id')`. Additionally use `$this->hx('post', '/url')` or `$this->data('value', 5)` for easy attribute bindings.
@@ -63,6 +71,7 @@ Use this for pure presentation (like atomic design elements: Button, Card, Notic
 - **Children:** Render nested children via `$this->renderChildren()`.
 
 ### Example: UI Element
+
 ```php
 namespace Htmx\Ui;
 use Totoglu\Htmx\Ui;
@@ -73,22 +82,25 @@ class Alert extends Ui {
     public function render(): string {
         $this->addClass('p-4 rounded');
         if ($this->param('type') === 'error') $this->addClass('bg-red-500');
-        
+
         return "<div {$this->attributes->render()}>" . $this->param('message') . "</div>";
     }
 }
 ```
 
 ## 4. HTMX Request & Response API
+
 Access via `$this->htmx` available anywhere in Component and Ui.
 
 ### Request API (`$this->htmx->request`)
+
 - `isHtmx()`: bool (Is this an HX-Request?)
 - `isBoosted()`: bool
 - `target()`: string|null (ID of target element)
 - `prompt()`: string|null (Response to hx-prompt)
 
 ### Response API (`$this->htmx->response`)
+
 - `redirect('/url')`: Client-side redirect via HX-Redirect.
 - `refresh()`: Full page refresh.
 - `trigger('eventName', ['data' => 1])`: Fire HX-Trigger events locally.
@@ -96,15 +108,19 @@ Access via `$this->htmx` available anywhere in Component and Ui.
 - `validationError('#target')`: Returns HTTP 422 to trigger extension errors.
 
 ### Fragment API (Out-Of-Band Swaps) (`$this->htmx->fragment`)
+
 - `addOobSwap('#header', '<div>New Header</div>')`: Queue HTML to be swapped anywhere in the DOM alongside the component render. HTMX parses this transparently.
 - `addHyperscript('console.log("hello")')`: Run a hyperscript block out of band.
 
 ## 5. CLI Scaffolding
+
 Always use the ProcessWire Console to scaffold new UI elements or Components. This ensures proper boilerplate and namespaces are created safely.
+
 - `php vendor/bin/wire make:htmx:component {Name} [--dir={CustomRelativePath}]`
 - `php vendor/bin/wire make:htmx:ui {Name} [--dir={CustomRelativePath}]`
 
 ## 6. Anti-Patterns
+
 - 🚫 `public function __construct()` -> BAD! Use `public function fill(array $props): self` / `public function mount(): void`.
 - 🚫 `$this->setState(['foo' => 'bar']);` -> BAD! `setState` does not exist. Do `$this->foo = 'bar';`.
 - 🚫 Echoing plain strings in UI elements instead of `$this->attributes->render()`.

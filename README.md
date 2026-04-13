@@ -67,6 +67,8 @@ sequenceDiagram
 
 To make the developer experience as seamless as possible, the HTMX module includes automatic namespace registration for your components and UI elements.
 
+### Site-Level Discovery
+
 By default, if the following directories exist in your ProcessWire installation, they are automatically registered with the native `ClassLoader`:
 
 - **`site/components/`** maps to the **`Htmx\Component`** namespace.
@@ -74,9 +76,23 @@ By default, if the following directories exist in your ProcessWire installation,
 
 _Note: These directory paths are fully customizable (e.g. `my-components/`) via the Module Configuration screen._
 
-By default, the module securely sandboxes all component rendering strictly within these explicitly defined directories and the native `templates/` folder. This is configurable via the **Allow Component Paths** module setting, balancing optimal Developer Experience (DX) with security.
-
 This means you can place your component class files directly in `site/components/` and simply declare the `namespace Htmx\Component;`, and the module will instantly know how to load and render them during stateless POST requests without requiring custom auto-loaders or `require_once` statements.
+
+### Module-Level Discovery (v1.1.4+)
+
+The HTMX module also automatically discovers components bundled inside **other ProcessWire modules** — no `autoload => true` or manual `registerComponent()` calls required.
+
+**How it works:**
+
+1. When the Htmx module initializes, it scans all installed modules that declare `'requires' => ['Htmx']` in their module info.
+2. For each qualifying module, it checks for `components/` and/or `ui/` directories in the module root.
+3. If found, those directories are registered with ProcessWire's `ClassLoader` under `Htmx\Component` and/or `Htmx\Ui`.
+
+**Result:** During HTMX AJAX requests to `/hx/req`, the endpoint can resolve and instantiate component classes from any Htmx-dependent module — even if that module is not autoloaded.
+
+The discovery results are cached in `WireCache` for performance. The cache is automatically invalidated when modules are refreshed via the admin UI.
+
+By default, the module securely sandboxes all component rendering strictly within these explicitly defined directories and the native `templates/` folder. This is configurable via the **Allow Component Paths** module setting, balancing optimal Developer Experience (DX) with security.
 
 ---
 
