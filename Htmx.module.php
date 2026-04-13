@@ -46,7 +46,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 114,
+            'version' => 115,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -712,14 +712,14 @@ HTML;
 
         foreach ($paths as $entry) {
             if (!empty($entry['components']) && is_dir($entry['components'])) {
-                $classLoader->addNamespace('Htmx\\Component', $entry['components']);
+                $classLoader->addNamespace('Htmx\Component', $entry['components']);
                 if ($this->allowComponentPaths && !in_array($entry['components'], $this->allowedComponentPaths, true)) {
                     $this->allowedComponentPaths[] = $entry['components'];
                 }
             }
 
             if (!empty($entry['ui']) && is_dir($entry['ui'])) {
-                $classLoader->addNamespace('Htmx\\Ui', $entry['ui']);
+                $classLoader->addNamespace('Htmx\Ui', $entry['ui']);
                 if ($this->allowComponentPaths && !in_array($entry['ui'], $this->allowedComponentPaths, true)) {
                     $this->allowedComponentPaths[] = $entry['ui'];
                 }
