@@ -14,20 +14,56 @@ class Fragment extends WireData
 {
     private array $oobSwaps = [];
 
+    private function isValidHtmlId(string $id): bool
+    {
+        return (bool) preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $id);
+    }
+
+    private function normalizeHtmlId(string $id): string
+    {
+        $id = preg_replace('/[^A-Za-z0-9\-_:.]/', '-', $id) ?? '';
+        $id = trim($id, '-');
+        if ($id === '' || !$this->isValidHtmlId($id)) {
+            $id = 'hx-' . substr(hash('sha1', $id . microtime(true)), 0, 12);
+        }
+        return $id;
+    }
+
     /**
      * Store HTML to be swapped out-of-band at the end of the request.
      */
     public function addOobSwap(string $selector, string $html, string $swapStyle = 'outerHTML'): self
     {
         $html = trim($html);
-        $isId = strpos($selector, '#') === 0;
-        $id = $isId ? substr($selector, 1) : $selector;
+        $selector = trim($selector);
+        $startsWithHash = strpos($selector, '#') === 0;
+        $rawId = $startsWithHash ? substr($selector, 1) : $selector;
+
+        $strict = false;
+        $htmx = $this->wire('htmx');
+        if ($htmx && isset($htmx->oobStrictIdOnly)) {
+            $strict = (bool) $htmx->oobStrictIdOnly;
+        }
+
+        if ($strict) {
+            $isStrictIdSelector = $startsWithHash
+                ? (bool) preg_match('/^#[A-Za-z][A-Za-z0-9\-_:.]*$/', $selector)
+                : $this->isValidHtmlId($rawId);
+            if (!$isStrictIdSelector) {
+                if ($this->wire('config')->debug) {
+                    $this->wire('log')->warning('HTMX OOB strict mode rejected selector: ' . $selector);
+                }
+                return $this;
+            }
+        }
+
+        $id = $this->normalizeHtmlId($rawId);
 
         // Try to inject natively if the HTMl root node contains the target ID.
         // This avoids destructive <div> wrappers breaking tables or semantic structures.
         $pattern = '/^(<[a-zA-Z0-9\-]+)([^>]*id=[\'"]' . preg_quote($id, '/') . '[\'"][^>]*)(>)/i';
 
-        if ($isId && preg_match($pattern, $html)) {
+        if (preg_match($pattern, $html)) {
             // Inject hx-swap-oob into the existing root node
             $wrapped = preg_replace(
                 $pattern,
