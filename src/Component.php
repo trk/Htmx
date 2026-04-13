@@ -16,8 +16,8 @@ use ProcessWire\WireException;
 /**
  * Component
  * Base class for building state-aware HTMX widgets in ProcessWire.
- * Magic auto-hydrates public properties using Reflection, validates HMAC and State TTL, 
- * and offers an Action Dispatcher (`executeAction`). 
+ * Magic auto-hydrates public properties using Reflection, validates HMAC and State TTL,
+ * and offers an Action Dispatcher (`executeAction`).
  */
 abstract class Component extends WireData
 {
@@ -26,7 +26,7 @@ abstract class Component extends WireData
     /**
      * Opt-in View for this component.
      * Can be a .php file path, a Totoglu\Htmx\Ui instance, or a raw HTML string.
-     * Protected so it does NOT get serialized into the HMAC-signed state payload 
+     * Protected so it does NOT get serialized into the HMAC-signed state payload
      * out of the box, preserving strict security against directory traversal.
      */
     protected mixed $view = null;
@@ -36,8 +36,8 @@ abstract class Component extends WireData
      */
     protected string $endpointUrl = '';
 
-    /** 
-     * Unique identity for this specific component instance to prevent 
+    /**
+     * Unique identity for this specific component instance to prevent
      * isolate state collisions if multiple identical components exist on page.
      */
     public string $id;
@@ -86,7 +86,7 @@ abstract class Component extends WireData
     /**
      * Call this inside your component script/render block to restore state
      * from the incoming HTMX request before processing logic.
-     * 
+     *
      * @param int $ttlHours Default is 24 hours. Payload expires after this time to prevent Replay Attacks.
      */
     public function hydrate(int $ttlHours = 24)
@@ -258,7 +258,7 @@ abstract class Component extends WireData
                 if (is_string($result) && $result !== '') {
                     $this->view = $result;
                 }
-                
+
                 return true;
             }
         }
@@ -328,8 +328,10 @@ abstract class Component extends WireData
                             continue;
                         } elseif ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids'])) {
                             $ids = array_map('intval', $v['ids']);
-                            $pages = $this->wire('pages')->findIds($ids); // Find objects securely
-                            $prop->setValue($this, clone $pages);
+                            $pages = $this->wire('pages')->getById($ids);
+                            if ($pages instanceof PageArray) {
+                                $prop->setValue($this, clone $pages);
+                            }
                             continue;
                         }
                     }
