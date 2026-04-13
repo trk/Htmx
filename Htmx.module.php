@@ -46,7 +46,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 113,
+            'version' => 114,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -75,6 +75,9 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('autoFlashMessages', true);
         $this->set('autoExtractTargets', false);
         $this->set('allowComponentPaths', false);
+        $this->set('oobStrictIdOnly', false);
+        $this->set('lifecycleBridge', true);
+        $this->set('lifecycleEventPrefix', 'pw-htmx');
         $this->set('extensions', []);
     }
 
@@ -111,6 +114,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
             }
         }
 
+        // Module-Level Auto-Discovery
+        // Automatically scan installed modules that depend on Htmx
+        // for Component/ and Ui/ subdirectories and register their namespaces
+        $this->discoverModuleComponents();
+
         // Alias for backwards/template convenience
         $this->wire()->config->htmx = $this->request->isHtmx();
     }
@@ -134,6 +142,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
         if ($this->request->isHtmx()) {
             $this->wire()->addHook($this->endpointUrl, $this, 'handleEndpoint');
         }
+
+        // Invalidate component discovery cache when modules are refreshed
+        $this->wire()->addHookAfter('Modules::refresh', function () {
+            $cache = $this->wire('cache');
+            if ($cache) {
+                $cache->delete('htmx.module-components');
+            }
+        });
 
         // Hook after Page::render to process HTMX lifecycle array-based triggers or general frontend injections
         $this->wire()->addHookAfter('Page::render', function (HookEvent $e) {
@@ -173,8 +189,40 @@ class Htmx extends WireData implements Module, ConfigurableModule
             }
 
             // 3. Load Frontend Assets natively
+            $isFullRender = !$this->request->isHtmx() || $this->request->isBoosted() || $this->request->isHistoryRestore();
+            if ($isFullRender && $this->lifecycleBridge && strpos($html, '</head>') !== false && strpos($html, 'window.__pwHtmxBridgeLoaded') === false) {
+                $prefix = $this->wire('sanitizer')->name((string) $this->lifecycleEventPrefix);
+                if ($prefix === '') {
+                    $prefix = 'pw-htmx';
+                }
+                $bridge = <<<HTML
+<script>
+window.__pwHtmxBridgeLoaded = true;
+window.pwHtmx = window.pwHtmx || { hooks: {} };
+window.pwHtmx.on = window.pwHtmx.on || function(name, fn) {
+  if (!window.pwHtmx.hooks[name]) window.pwHtmx.hooks[name] = [];
+  window.pwHtmx.hooks[name].push(fn);
+};
+function pwHtmxEmit(name, detail) {
+  try {
+    window.dispatchEvent(new CustomEvent('{$prefix}:' + name, { detail: detail }));
+  } catch (e) {}
+  var list = (window.pwHtmx && window.pwHtmx.hooks && window.pwHtmx.hooks[name]) ? window.pwHtmx.hooks[name] : [];
+  for (var i = 0; i < list.length; i++) {
+    try { list[i](detail); } catch (e) {}
+  }
+}
+document.addEventListener('htmx:afterSwap', function(evt){ pwHtmxEmit('afterSwap', evt.detail); });
+document.addEventListener('htmx:afterSettle', function(evt){ pwHtmxEmit('afterSettle', evt.detail); });
+document.addEventListener('htmx:beforeRequest', function(evt){ pwHtmxEmit('beforeRequest', evt.detail); });
+document.addEventListener('htmx:responseError', function(evt){ pwHtmxEmit('responseError', evt.detail); });
+</script>
+HTML;
+                $html = str_replace('</head>', "{$bridge}\n</head>", $html);
+            }
+
             if (!$this->inAdmin() && $this->loadFrontendAssets) {
-                if (!$this->request->isHtmx() || $this->request->isBoosted() || $this->request->isHistoryRestore()) {
+                if ($isFullRender) {
                     $scripts = "";
                     foreach ($this->getAssetUrls() as $url) {
                         $scripts .= "\n<script src=\"{$url}\"></script>";
@@ -258,11 +306,19 @@ HTML;
         }
 
         list($encoded, $hash) = $parts;
+        $salt = $this->wire('config')->userAuthSalt;
+        $expectedHash = hash_hmac('sha256', $encoded, $salt);
+        if (!hash_equals($expectedHash, $hash)) {
+            $this->wire('log')->error("HTMX Endpoint Failed: Invalid HMAC signature.");
+            http_response_code(403);
+            return "Forbidden: Invalid HTMX State Signature.";
+        }
 
         // Decrypt & Validate payload class to boot it up
         // (Note: $cmp->hydrate() performs strict HMAC/Replay checks again, 
         // but we need to know WHICH class to instantiate first securely)
-        $decoded = json_decode(base64_decode($encoded), true);
+        $decodedJson = base64_decode($encoded, true);
+        $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
         if (!is_array($decoded) || empty($decoded['__cmp'])) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
             http_response_code(400);
@@ -324,6 +380,7 @@ HTML;
             // URL Hooks auto-inject response headers, so we just return string!
             return $html;
         } catch (\Throwable $ex) {
+            $this->wire('log')->error("HTMX Endpoint Crash: " . $ex->getMessage() . " in " . $ex->getFile() . ":" . $ex->getLine() . "\nTrace: " . $ex->getTraceAsString());
             http_response_code(500);
             if ($this->wire('config')->debug) {
                 return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " in " . $ex->getFile() . ":" . $ex->getLine() . " -->";
@@ -578,6 +635,30 @@ HTML;
         $f->columnWidth = 50;
         $inputfields->add($f);
 
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'oobStrictIdOnly');
+        $f->label = $this->_('OOB Swaps: Strict ID Only');
+        $f->description = $this->_('When enabled, OOB swaps will only accept "#id" or "id" selectors. Other selectors will be ignored (safer for production).');
+        $f->checked = (bool) $this->oobStrictIdOnly;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'lifecycleBridge');
+        $f->label = $this->_('Lifecycle Event Bridge');
+        $f->description = $this->_('When enabled, exposes HTMX lifecycle as custom events and a simple hook registry (framework-agnostic).');
+        $f->checked = (bool) $this->lifecycleBridge;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldText');
+        $f->attr('name', 'lifecycleEventPrefix');
+        $f->label = $this->_('Lifecycle Event Prefix');
+        $f->description = $this->_('Prefix used for dispatched events (example: "pw-htmx:afterSwap").');
+        $f->value = (string) $this->lifecycleEventPrefix;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
         $f = $modules->get('InputfieldCheckboxes');
         $f->attr('name', 'extensions');
         $f->label = $this->_('Enable HTMX Extensions');
@@ -592,6 +673,121 @@ HTML;
 
         return $inputfields;
     }
+
+    /**
+     * Discovers HTMX components and UI elements from installed ProcessWire modules.
+     *
+     * Scans modules that declare a dependency on 'Htmx' in their module info.
+     * If a module has a `components/` or `ui/` subdirectory, those paths are
+     * registered under the `Htmx\Component` and `Htmx\Ui` namespaces respectively,
+     * following the same convention as site-level auto-discovery.
+     *
+     * Results are cached in WireCache to avoid filesystem scanning on every request.
+     * Modules are responsible for their own Composer dependencies internally.
+     */
+    protected function discoverModuleComponents(): void
+    {
+        $cache = $this->wire('cache');
+        $paths = null;
+
+        if ($cache) {
+            $cached = $cache->get('htmx.module-components');
+            if ($cached) {
+                $paths = json_decode($cached, true);
+            }
+        }
+
+        if (!is_array($paths)) {
+            $paths = $this->buildModuleComponentPaths();
+            if ($cache) {
+                $cache->save(
+                    'htmx.module-components',
+                    json_encode($paths, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                    WireCache::expireNever
+                );
+            }
+        }
+
+        $classLoader = $this->wire('classLoader');
+
+        foreach ($paths as $entry) {
+            if (!empty($entry['components']) && is_dir($entry['components'])) {
+                $classLoader->addNamespace('Htmx\\Component', $entry['components']);
+                if ($this->allowComponentPaths && !in_array($entry['components'], $this->allowedComponentPaths, true)) {
+                    $this->allowedComponentPaths[] = $entry['components'];
+                }
+            }
+
+            if (!empty($entry['ui']) && is_dir($entry['ui'])) {
+                $classLoader->addNamespace('Htmx\\Ui', $entry['ui']);
+                if ($this->allowComponentPaths && !in_array($entry['ui'], $this->allowedComponentPaths, true)) {
+                    $this->allowedComponentPaths[] = $entry['ui'];
+                }
+            }
+        }
+    }
+
+    /**
+     * Scans installed modules that depend on Htmx for components/ and ui/ directories.
+     *
+     * @return array<int, array{module: string, components?: string, ui?: string}>
+     */
+    private function buildModuleComponentPaths(): array
+    {
+        $result = [];
+        $modules = $this->wire('modules');
+        $modulesPath = $this->wire('config')->paths->siteModules;
+
+        foreach ($modules as $module) {
+            $info = $modules->getModuleInfoVerbose($module);
+            $className = $info['name'] ?? '';
+
+            // Only scan modules that explicitly require Htmx
+            $requires = $info['requires'] ?? [];
+            if (!is_array($requires)) {
+                $requires = [$requires];
+            }
+
+            $dependsOnHtmx = false;
+            foreach ($requires as $req) {
+                if (is_string($req) && stripos($req, 'Htmx') === 0) {
+                    $dependsOnHtmx = true;
+                    break;
+                }
+            }
+
+            if (!$dependsOnHtmx || $className === 'Htmx') {
+                continue;
+            }
+
+            $moduleDir = $modulesPath . $className . '/';
+            if (!is_dir($moduleDir)) {
+                continue;
+            }
+
+            $componentsDir = $moduleDir . 'components/';
+            $uiDir = $moduleDir . 'ui/';
+
+            if (!is_dir($componentsDir) && !is_dir($uiDir)) {
+                continue;
+            }
+
+            $entry = ['module' => $className];
+
+            if (is_dir($componentsDir)) {
+                $entry['components'] = $componentsDir;
+            }
+
+            if (is_dir($uiDir)) {
+                $entry['ui'] = $uiDir;
+            }
+
+            $result[] = $entry;
+        }
+
+        return $result;
+    }
+
     /**
      * Determines if the current request is within the ProcessWire Admin.
      */
