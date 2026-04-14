@@ -86,6 +86,22 @@ In the ProcessWire admin, the module loads `resources/assets/js/pw-htmx-guard.js
 - If a full document is detected, the swap is cancelled.
 - You can override the alert message by defining `window.__pwHtmxGuardMessage` before the swap occurs.
 
+## 🐞 Debugging with TracyDebugger (Debug Mode Only)
+
+When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is installed, Htmx can provide extra debugging support (enabled by default via the module config option `tracySupport`):
+
+- Adds a **Tracy bar panel** named **HTMX** with request/endpoint details.
+- Emits **debug response headers** on HTMX requests (useful in the browser Network tab):
+  - `X-PW-HTMX`
+  - `X-PW-HTMX-Component`
+  - `X-PW-HTMX-Action`
+  - `X-PW-HTMX-Target`
+  - `X-PW-HTMX-StateKey`
+  - `X-PW-HTMX-OOB`
+  - `X-PW-HTMX-Error` / `X-PW-HTMX-Exception` (on endpoint exceptions)
+
+This integration is **never active in production** unless `config->debug` is enabled.
+
 ## 🪄 Zero-Configuration Auto-Discovery
 
 To make the developer experience as seamless as possible, the HTMX module includes automatic namespace registration for your components and UI elements.

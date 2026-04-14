@@ -93,6 +93,10 @@ class Alert extends Ui {
 
 Access via `$this->htmx` available anywhere in Component and Ui.
 
+### Debugging (TracyDebugger)
+
+When `config->debug` is enabled and the **TracyDebugger** module is installed, Htmx can expose an HTMX panel in the Tracy bar and emit debug response headers for HTMX requests (controlled by the `tracySupport` module config option, default: enabled). This must never be relied on for production logic.
+
 ### Request API (`$this->htmx->request`)
 
 - `isHtmx()`: bool (Is this an HX-Request?)

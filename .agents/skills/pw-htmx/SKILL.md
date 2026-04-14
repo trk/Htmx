@@ -26,6 +26,7 @@ Before engaging with the UI system, strictly verify these architectural paramete
 - **The Render Payload Requirement:** When echoing HTML inside a Component's `render()` method, did you echo `$this->renderStatePayload()`? Omitting this causes unrecoverable state loss in subsequent HTMX requests resulting in HMAC errors!
 - **Multiple Component Instances:** If multiple components live inside the same ProcessWire form, avoid `hx__state` collisions by using `setStateKey('hx__state__{targetId}')` and keeping `hx-target` consistent. The endpoint will prefer `hx__state__{HX-Target}` when available.
 - **Subdirectory Installs:** Always use `$this->requestUrl()` for `hx-post`. It will prefix the endpoint with `config()->urls->root` for ProcessWire installs in subdirectories (unless an absolute URL is provided).
+- **TracyDebugger (Debug Only):** If `config->debug` is enabled and TracyDebugger is installed, the Htmx module may emit helpful debug response headers and provide an "HTMX" Tracy panel (controlled by the `tracySupport` module setting).
 - **Fluent Attributes Construction:** When building stateless UI elements, did you transition away from rudimentary hardcoded string manipulations (`<div class="uk-card">`) to the Fluent `ParameterBag/AttributeBag` system (`$this->addClass('uk-card')->attributes->render()`)?
 
 ## Execution Phases

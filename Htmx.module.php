@@ -8,6 +8,7 @@ use Totoglu\Htmx\Request;
 use Totoglu\Htmx\Response;
 use Totoglu\Htmx\Fragment;
 use Totoglu\Htmx\Component;
+use Totoglu\Htmx\Debug\HtmxTracyPanel;
 
 /**
  * HTMX Module for ProcessWire
@@ -41,6 +42,12 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
     /** @var array<string> Valid and checked paths to components and UI that are allowed for rendering */
     public $allowedComponentPaths = [];
+
+    /**
+     * Internal debug info for Tracy panel / response headers (per request).
+     * @var array<string, mixed>
+     */
+    protected array $tracyDebug = [];
 
     public static function getModuleInfo()
     {
@@ -79,6 +86,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('lifecycleBridge', true);
         $this->set('lifecycleEventPrefix', 'pw-htmx');
         $this->set('extensions', []);
+        $this->set('tracySupport', true);
     }
 
     public function wired()
@@ -125,6 +133,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
     public function ready()
     {
+        // TracyDebugger integration (debug-only)
+        if ($this->isTracySupportEnabled()) {
+            $this->registerTracyPanel();
+        }
+
         // Load Admin Assets
         if ($this->inAdmin()) {
             foreach ($this->getAssetUrls() as $url) {
@@ -288,9 +301,30 @@ HTML;
     {
         $input = $this->wire('input');
 
+        // Prime Tracy debug payload (per-request)
+        $this->tracyDebug = [
+            'isHtmx' => (bool) $this->request->isHtmx(),
+            'isBoosted' => (bool) $this->request->isBoosted(),
+            'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
+            'endpointUrl' => (string) $this->endpointUrl,
+            'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
+            'target' => $this->request ? $this->request->target() : null,
+            'trigger' => $_SERVER['HTTP_HX_TRIGGER'] ?? null,
+            'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
+            'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
+            'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            'component' => null,
+            'action' => $input->post('hx__action') ?: $input->get('hx__action'),
+            'stateKey' => null,
+            'oobCount' => null,
+            'error' => null,
+        ];
+
         // Allow POST requests only
         if (!$input->requestMethod('POST')) {
             $this->wire('log')->error("HTMX Endpoint Failed: Not a POST request. Method: " . $_SERVER['REQUEST_METHOD']);
+            $this->tracyDebug['error'] = 'Not a POST request';
+            $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Only HTMX POST requests are allowed.";
         }
@@ -319,6 +353,9 @@ HTML;
         }
         if (!$payload) {
             $this->wire('log')->error("HTMX Endpoint Failed: Missing hx__state in POST data.");
+            $this->tracyDebug['error'] = 'Missing state payload';
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Missing HTMX State Payload.";
         }
@@ -326,6 +363,9 @@ HTML;
         $parts = explode('|', $payload, 2);
         if (count($parts) !== 2) {
             $this->wire('log')->error("HTMX Endpoint Failed: Malformed payload. Parts count: " . count($parts));
+            $this->tracyDebug['error'] = 'Malformed state payload';
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Malformed HTMX State Payload.";
         }
@@ -335,6 +375,9 @@ HTML;
         $expectedHash = hash_hmac('sha256', $encoded, $salt);
         if (!hash_equals($expectedHash, $hash)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid HMAC signature.");
+            $this->tracyDebug['error'] = 'Invalid HMAC signature';
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
             http_response_code(403);
             return "Forbidden: Invalid HTMX State Signature.";
         }
@@ -346,6 +389,9 @@ HTML;
         $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
         if (!is_array($decoded) || empty($decoded['__cmp'])) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
+            $this->tracyDebug['error'] = 'Invalid state structure';
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Invalid State Structure.";
         }
@@ -356,6 +402,10 @@ HTML;
 
         if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid Component Class. Class: " . $class);
+            $this->tracyDebug['error'] = 'Invalid component class';
+            $this->tracyDebug['component'] = $class;
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Invalid Component Class.";
         }
@@ -363,6 +413,9 @@ HTML;
         try {
             /** @var Component $cmp */
             $cmp = new $class();
+
+            $this->tracyDebug['component'] = $class;
+            $this->tracyDebug['stateKey'] = $payloadKey;
 
             // Ensure hydrate() reads the same stateKey we validated above
             if ($payloadKey !== 'hx__state' && method_exists($cmp, 'setStateKey')) {
@@ -382,6 +435,9 @@ HTML;
             if (!empty($oob)) {
                 $html .= "\n" . $oob;
             }
+            $this->tracyDebug['oobCount'] = is_array($oob) ? count($oob) : (is_string($oob) && $oob !== '' ? 1 : 0);
+
+            $this->sendTracyHeaders();
 
             // 2. Process Auto Flash Messages
             if ($this->autoFlashMessages) {
@@ -411,11 +467,101 @@ HTML;
             return $html;
         } catch (\Throwable $ex) {
             $this->wire('log')->error("HTMX Endpoint Crash: " . $ex->getMessage() . " in " . $ex->getFile() . ":" . $ex->getLine() . "\nTrace: " . $ex->getTraceAsString());
+            $this->tracyDebug['error'] = $ex->getMessage();
+            $this->sendTracyHeaders($ex);
+
+            // If Tracy is available, also forward the exception to its logger.
+            if ($this->isTracySupportEnabled() && class_exists(\Tracy\Debugger::class)) {
+                try {
+                    \Tracy\Debugger::log($ex);
+                } catch (\Throwable $ignore) {
+                }
+            }
             http_response_code(500);
             if ($this->wire('config')->debug) {
                 return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " in " . $ex->getFile() . ":" . $ex->getLine() . " -->";
             }
             return "Internal Server Error";
+        }
+    }
+
+    /**
+     * Determine whether Tracy support is enabled for this request.
+     */
+    protected function isTracySupportEnabled(): bool
+    {
+        if (!(bool) $this->tracySupport) return false;
+        $config = $this->wire('config');
+        if (!$config || !(bool) $config->debug) return false;
+        $modules = $this->wire('modules');
+        if (!$modules || !method_exists($modules, 'isInstalled') || !$modules->isInstalled('TracyDebugger')) return false;
+        if (!class_exists(\Tracy\Debugger::class)) return false;
+        return true;
+    }
+
+    /**
+     * Register a Tracy bar panel showing HTMX request details.
+     */
+    protected function registerTracyPanel(): void
+    {
+        try {
+            $bar = \Tracy\Debugger::getBar();
+            if (!$bar) return;
+
+            // Use a lazy provider so the panel can reflect updated data later in the request lifecycle.
+            $bar->addPanel(new HtmxTracyPanel(function (): array {
+                return $this->getTracyPanelData();
+            }));
+        } catch (\Throwable $ignore) {
+        }
+    }
+
+    /**
+     * Data provider for Tracy panel.
+     * @return array<string, mixed>
+     */
+    protected function getTracyPanelData(): array
+    {
+        // If the endpoint ran, this will include component/action/stateKey/etc.
+        $data = $this->tracyDebug ?: [];
+
+        // Always include some basics.
+        $data['debugEnabled'] = (bool) ($this->wire('config')->debug ?? false);
+        $data['tracySupport'] = (bool) $this->tracySupport;
+
+        return $data;
+    }
+
+    /**
+     * Emit debug response headers for HTMX requests (safe no-op when headers already sent).
+     */
+    protected function sendTracyHeaders(?\Throwable $ex = null): void
+    {
+        if (!$this->isTracySupportEnabled()) return;
+        if (!$this->request || !$this->request->isHtmx()) return;
+        if (headers_sent()) return;
+
+        $d = $this->tracyDebug ?: [];
+
+        // Keep values short and header-safe.
+        $safe = static function ($v): string {
+            $s = is_scalar($v) ? (string) $v : '';
+            $s = preg_replace('/\\s+/', ' ', $s ?? '');
+            return substr($s, 0, 200);
+        };
+
+        header('X-PW-HTMX: 1');
+        if (!empty($d['component'])) header('X-PW-HTMX-Component: ' . $safe($d['component']));
+        if (!empty($d['action'])) header('X-PW-HTMX-Action: ' . $safe($d['action']));
+        if (!empty($d['target'])) header('X-PW-HTMX-Target: ' . $safe($d['target']));
+        if (!empty($d['stateKey'])) header('X-PW-HTMX-StateKey: ' . $safe($d['stateKey']));
+        if (isset($d['oobCount'])) header('X-PW-HTMX-OOB: ' . $safe($d['oobCount']));
+
+        if ($ex) {
+            header('X-PW-HTMX-Error: ' . $safe($ex->getMessage()));
+            header('X-PW-HTMX-Exception: ' . $safe(get_class($ex)));
+        } elseif (!empty($d['error'])) {
+            header('X-PW-HTMX-Error: ' . $safe($d['error']));
         }
     }
 
@@ -678,6 +824,14 @@ HTML;
         $f->label = $this->_('Lifecycle Event Bridge');
         $f->description = $this->_('When enabled, exposes HTMX lifecycle as custom events and a simple hook registry (framework-agnostic).');
         $f->checked = (bool) $this->lifecycleBridge;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'tracySupport');
+        $f->label = $this->_('TracyDebugger Support (Debug Only)');
+        $f->description = $this->_('When enabled, and when ProcessWire debug mode is active with TracyDebugger installed, the module adds an HTMX Tracy panel, emits debug response headers for HTMX requests, and surfaces endpoint exceptions more clearly. (No effect in production.)');
+        $f->checked = (bool) $this->tracySupport;
         $f->columnWidth = 50;
         $inputfields->add($f);
 
