@@ -46,7 +46,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 115,
+            'version' => 116,
             'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
