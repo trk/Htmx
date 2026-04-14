@@ -78,6 +78,23 @@ abstract class Component extends WireData
     }
 
     /**
+     * Advanced usage: when multiple HTMX components exist on the same page,
+     * customize the state key per instance to avoid payload collisions.
+     *
+     * Example: hx__state__blocks-editor-body
+     */
+    public function setStateKey(string $key): self
+    {
+        $this->stateKey = $key;
+        return $this;
+    }
+
+    public function getStateKey(): string
+    {
+        return $this->stateKey;
+    }
+
+    /**
      * Lifecycle Hook: Executed once during instantiation before render
      * Useful for setting up data if props are passed.
      */
@@ -94,6 +111,13 @@ abstract class Component extends WireData
         $input = $this->wire('input');
 
         $payload = $input->post($this->stateKey) ?: $input->get($this->stateKey);
+
+        // In some edge cases (e.g. multiple components within the same form),
+        // ProcessWire may provide the payload as an array.
+        if (is_array($payload)) {
+            $first = reset($payload);
+            $payload = is_string($first) ? $first : null;
+        }
 
         if ($payload) {
             $parts = explode('|', $payload, 2);
@@ -430,7 +454,24 @@ abstract class Component extends WireData
         }
 
         $htmx = $this->wire('htmx');
-        return $htmx && $htmx->endpointUrl ? $htmx->endpointUrl : '/hx/req';
+        $endpoint = $htmx && $htmx->endpointUrl ? $htmx->endpointUrl : '/hx/req';
+
+        // For ProcessWire installs in a subdirectory, prefix the endpoint with the root URL
+        // (client-side URL building).
+        // Example: urls->root = "/cms/" and endpoint "/hx/req" -> "/cms/hx/req"
+        $config = $this->wire('config');
+        $root = rtrim((string) $config->urls->root, '/');
+
+        // If it's an absolute URL, leave it untouched.
+        if (is_string($endpoint) && (str_starts_with($endpoint, 'http://') || str_starts_with($endpoint, 'https://'))) {
+            return $endpoint;
+        }
+
+        if ($root && is_string($endpoint) && str_starts_with($endpoint, '/') && !str_starts_with($endpoint, $root . '/')) {
+            return $root . $endpoint;
+        }
+
+        return $endpoint;
     }
 
     public function setEndpointUrl(string $url): self

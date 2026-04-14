@@ -22,7 +22,7 @@ use Totoglu\Htmx\Component;
  * @property array $extensions Extensions to load (sse, ws, etc)
  * @property string $endpointUrl URL hook endpoint for state components (default: /hx/req)
  *
- * @author İskender TOTOĞLU, @ukyo (community), @trk (Github)
+ * @author Iskender TOTOGLU, @ukyo (community), @trk (GitHub)
  * @website https://www.totoglu.com
  */
 class Htmx extends WireData implements Module, ConfigurableModule
@@ -134,10 +134,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
             // Inject CSRF protection bridge
             $baseUrl = $this->wire('config')->urls->siteModules . $this->className() . "/resources/assets/js/";
             $this->wire('config')->scripts->add($baseUrl . "pw-csrf.js");
+            // Guard: prevent full HTML documents swapping into targets
+            $this->wire('config')->scripts->add($baseUrl . "pw-htmx-guard.js");
         }
 
-        // Endpoint Hook for Stateless Component Processing
-        // Resolves POST requests to the configured endpointUrl
+        // Endpoint hook for stateless component processing.
+        // Resolves POST requests to the configured endpointUrl.
+        // Note: ProcessWire already normalizes hook paths relative to the install root.
+        // Client-side root prefixing is handled in Component::requestUrl().
         $this->endpointUrl = '/' . ltrim($this->endpointUrl ?: '/hx/req', '/');
         if ($this->request->isHtmx()) {
             $this->wire()->addHook($this->endpointUrl, $this, 'handleEndpoint');
@@ -291,7 +295,28 @@ HTML;
             return "Bad Request: Only HTMX POST requests are allowed.";
         }
 
-        $payload = $input->post('hx__state');
+        // Prefer instance-specific payload (hx__state__{HX-Target}) to avoid collisions when multiple
+        // components exist within the same ProcessWire form.
+        $payload = null;
+        $payloadKey = 'hx__state';
+        $target = $this->request ? $this->request->target() : null;
+        if ($target) {
+            $key = 'hx__state__' . $target;
+            $payload = $input->post($key);
+            if ($payload) {
+                $payloadKey = $key;
+            }
+        }
+        if (!$payload) {
+            $payload = $input->post('hx__state');
+        }
+
+        // If multiple hx__state values exist, ProcessWire might provide an array depending on context.
+        if (is_array($payload)) {
+            // try first string value
+            $first = reset($payload);
+            $payload = is_string($first) ? $first : '';
+        }
         if (!$payload) {
             $this->wire('log')->error("HTMX Endpoint Failed: Missing hx__state in POST data.");
             http_response_code(400);
@@ -338,6 +363,11 @@ HTML;
         try {
             /** @var Component $cmp */
             $cmp = new $class();
+
+            // Ensure hydrate() reads the same stateKey we validated above
+            if ($payloadKey !== 'hx__state' && method_exists($cmp, 'setStateKey')) {
+                $cmp->setStateKey($payloadKey);
+            }
 
             // Hydrate from $_POST (Also performs full HMAC, Replay, and CSRF verification internally)
             $cmp->hydrate();
