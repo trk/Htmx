@@ -50,18 +50,41 @@ sequenceDiagram
 
     Browser->>Htmx: Initial Page Load (GET)
     Htmx->>Component: mount() & fill()
-    Component->>Browser: Render UI + Encrypted __state Payload
+    Component->>Browser: Render UI + Encrypted hx__state payload
 
     Note over Browser, Component: User interacts (e.g. Clicks Button)
 
-    Browser->>Htmx: HX-Request (POST) + __state
-    Htmx->>Component: hydrate(__state)
+    Browser->>Htmx: HX-Request (POST) + hx__state
+    Htmx->>Component: hydrate(hx__state)
     Component->>DB: Object Synthesis (Fetch Pages by ID)
     Htmx->>Component: executeAction('like')
-    Component->>Browser: Re-render UI + New Encrypted __state
+    Component->>Browser: Re-render UI + New Encrypted hx__state
 ```
 
 ---
+
+## 🧩 Advanced: State Payload Keys & Multiple Instances
+
+By default, state is transported via a signed payload named **`hx__state`** (rendered by `Component::renderStatePayload()`).
+
+If you embed **multiple HTMX components inside the same ProcessWire form**, it is possible to end up with multiple `hx__state` inputs in the POST. In certain contexts, ProcessWire may also represent this value as an array.
+
+This module supports **instance-specific state keys** to avoid collisions:
+
+- Use `Component::setStateKey('hx__state__{targetId}')` during render.
+- Ensure your HTMX request uses a matching `hx-target` (so the server can resolve the correct payload).
+- The endpoint will prefer `hx__state__{HX-Target}` when present, and fall back to `hx__state`.
+
+## 🌐 Subdirectory Installs & Endpoint URLs
+
+For ProcessWire installs living in a subdirectory (where `config()->urls->root` is not `/`), `Component::requestUrl()` will automatically prefix the endpoint with the install root for client-side URL correctness (unless you provide an absolute URL).
+
+## 🛡 Admin Safety: Full-Document Swap Guard
+
+In the ProcessWire admin, the module loads `resources/assets/js/pw-htmx-guard.js` to prevent accidental swaps where an HTMX request returns a full HTML document (common causes: wrong endpoint, login redirect, CSRF issues).
+
+- If a full document is detected, the swap is cancelled.
+- You can override the alert message by defining `window.__pwHtmxGuardMessage` before the swap occurs.
 
 ## 🪄 Zero-Configuration Auto-Discovery
 

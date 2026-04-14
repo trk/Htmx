@@ -18,11 +18,12 @@ You are an agentic AI writing code for the `Totoglu\Htmx` module in ProcessWire.
 Use this for business logic, DB queries, and view-level state.
 
 - **NO `setState()` or `update()`:** State is synchronized exclusively via `public` properties. Just mutate the variable (`$this->count = 5;`).
-- **NO `__construct()`:** Use `public function fill(array $props): self` for dependency injection and `public function mount(): void` for one-time initialization.
+- **Do NOT implement your own `__construct()`:** Use `public function fill(array $props): self` for dependency injection and `public function mount(): void` for one-time initialization.
 - **Action Methods:** Define any public method (e.g., `increment()`). It gets executed automatically if triggered by an HTMX request mapping to `hx__action`.
 - **Hydration:** Public properties type-hinted with ProcessWire objects (like `Page`) are automatically collapsed to IDs in the DOM and re-fetched from the DB upon POST. You do not write boilerplate for this.
 - **Rendering:** `render(): string` must output HTML. Always echo `$this->renderStatePayload()` inside your component (e.g. inside a `<form>` or a container that is included via `hx-include`) to maintain state securely via HMAC signatures and replay protection.
 - **Routing:** Use `$this->requestUrl()` for the `hx-post` URL. The Htmx module automatically routes requests to your namespaced components. Actions (mutations) MUST be sent via POST.
+- **Multiple instances in one form:** If you have multiple components inside the same ProcessWire form, use `setStateKey('hx__state__{targetId}')` to avoid collisions and keep `hx-target` consistent with `{targetId}`. The endpoint will prefer `hx__state__{HX-Target}` when present.
 
 ### Example: Component
 

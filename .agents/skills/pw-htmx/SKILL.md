@@ -24,6 +24,8 @@ Before engaging with the UI system, strictly verify these architectural paramete
   - Is this purely a presentation slice (Button, Card, Accordion) taking data functionally without holding state? -> Utilize `Totoglu\Htmx\Ui` (`namespace Htmx\Ui;`).
 - **The State Management Fallacy:** Component classes do not house `setState()` or `update()` methods! State is dictated simply by mutating public properties (`$this->myVar = 5;`). Acknowledge that the module core inherently triggers updates autonomously based upon HTMX POST requests.
 - **The Render Payload Requirement:** When echoing HTML inside a Component's `render()` method, did you echo `$this->renderStatePayload()`? Omitting this causes unrecoverable state loss in subsequent HTMX requests resulting in HMAC errors!
+- **Multiple Component Instances:** If multiple components live inside the same ProcessWire form, avoid `hx__state` collisions by using `setStateKey('hx__state__{targetId}')` and keeping `hx-target` consistent. The endpoint will prefer `hx__state__{HX-Target}` when available.
+- **Subdirectory Installs:** Always use `$this->requestUrl()` for `hx-post`. It will prefix the endpoint with `config()->urls->root` for ProcessWire installs in subdirectories (unless an absolute URL is provided).
 - **Fluent Attributes Construction:** When building stateless UI elements, did you transition away from rudimentary hardcoded string manipulations (`<div class="uk-card">`) to the Fluent `ParameterBag/AttributeBag` system (`$this->addClass('uk-card')->attributes->render()`)?
 
 ## Execution Phases
