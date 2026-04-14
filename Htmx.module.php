@@ -135,6 +135,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         // TracyDebugger integration (debug-only)
         if ($this->isTracySupportEnabled()) {
+            // Ensure the panel has useful context even on non-endpoint requests.
+            $this->primeTracyDebugContext();
             $this->registerTracyPanel();
         }
 
@@ -523,6 +525,8 @@ HTML;
     protected function getTracyPanelData(): array
     {
         // If the endpoint ran, this will include component/action/stateKey/etc.
+        // Otherwise we still want basic HTMX request context.
+        $this->primeTracyDebugContext();
         $data = $this->tracyDebug ?: [];
 
         // Always include some basics.
@@ -530,6 +534,45 @@ HTML;
         $data['tracySupport'] = (bool) $this->tracySupport;
 
         return $data;
+    }
+
+    /**
+     * Populate baseline debug context for the Tracy panel.
+     *
+     * This is safe to call multiple times and will only fill missing keys.
+     */
+    protected function primeTracyDebugContext(): void
+    {
+        // Only meaningful for HTMX requests.
+        if (!$this->request || !$this->request->isHtmx()) return;
+
+        $input = $this->wire('input');
+
+        $defaults = [
+            'isHtmx' => (bool) $this->request->isHtmx(),
+            'isBoosted' => (bool) $this->request->isBoosted(),
+            'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
+            'endpointUrl' => (string) $this->endpointUrl,
+            'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
+            'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
+            'target' => $this->request ? $this->request->target() : null,
+            'trigger' => $_SERVER['HTTP_HX_TRIGGER'] ?? null,
+            'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
+            'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
+            'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            'component' => $this->tracyDebug['component'] ?? null,
+            'action' => ($this->tracyDebug['action'] ?? null) ?? ($input ? ($input->post('hx__action') ?: $input->get('hx__action')) : null),
+            'stateKey' => $this->tracyDebug['stateKey'] ?? null,
+            'oobCount' => $this->tracyDebug['oobCount'] ?? null,
+            'error' => $this->tracyDebug['error'] ?? null,
+        ];
+
+        // Merge without overriding endpoint-provided values.
+        foreach ($defaults as $k => $v) {
+            if (!array_key_exists($k, $this->tracyDebug)) {
+                $this->tracyDebug[$k] = $v;
+            }
+        }
     }
 
     /**
