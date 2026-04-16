@@ -151,6 +151,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
             $this->wire('config')->scripts->add($baseUrl . "pw-csrf.js");
             // Guard: prevent full HTML documents swapping into targets
             $this->wire('config')->scripts->add($baseUrl . "pw-htmx-guard.js");
+
+            // Optional debug helper (no behavior change unless window.__pwHtmxDebug === true)
+            if ($this->wire('config')->debug) {
+                $this->wire('config')->scripts->add($baseUrl . "pw-htmx-debug.js");
+            }
         }
 
         // Endpoint hook for stateless component processing.
@@ -292,6 +297,9 @@ HTML;
                 }
             }
 
+            // Emit debug headers on standard HTMX requests (non-endpoint), debug-only.
+            $this->sendTracyHeaders();
+
             $e->return = $html;
         });
     }
@@ -305,27 +313,34 @@ HTML;
 
         // Prime Tracy debug payload (per-request)
         $this->tracyDebug = [
+            'reqId' => $this->tracyDebug['reqId'] ?? null,
             'isHtmx' => (bool) $this->request->isHtmx(),
             'isBoosted' => (bool) $this->request->isBoosted(),
             'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
             'endpointUrl' => (string) $this->endpointUrl,
             'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
+            'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
             'target' => $this->request ? $this->request->target() : null,
             'trigger' => $_SERVER['HTTP_HX_TRIGGER'] ?? null,
             'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
             'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
             'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            // Redacted: only keys, never values.
+            'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
             'component' => null,
             'action' => $input->post('hx__action') ?: $input->get('hx__action'),
             'stateKey' => null,
             'oobCount' => null,
-            'error' => null,
+            'errorCode' => null,
+            'exceptionClass' => null,
+            'timingMs' => null,
         ];
+        $this->primeTracyDebugContext();
 
         // Allow POST requests only
         if (!$input->requestMethod('POST')) {
             $this->wire('log')->error("HTMX Endpoint Failed: Not a POST request. Method: " . $_SERVER['REQUEST_METHOD']);
-            $this->tracyDebug['error'] = 'Not a POST request';
+            $this->tracyDebug['errorCode'] = 'not_post';
             $this->sendTracyHeaders();
             http_response_code(400);
             return "Bad Request: Only HTMX POST requests are allowed.";
@@ -355,7 +370,7 @@ HTML;
         }
         if (!$payload) {
             $this->wire('log')->error("HTMX Endpoint Failed: Missing hx__state in POST data.");
-            $this->tracyDebug['error'] = 'Missing state payload';
+            $this->tracyDebug['errorCode'] = 'missing_state';
             $this->tracyDebug['stateKey'] = $payloadKey;
             $this->sendTracyHeaders();
             http_response_code(400);
@@ -365,7 +380,7 @@ HTML;
         $parts = explode('|', $payload, 2);
         if (count($parts) !== 2) {
             $this->wire('log')->error("HTMX Endpoint Failed: Malformed payload. Parts count: " . count($parts));
-            $this->tracyDebug['error'] = 'Malformed state payload';
+            $this->tracyDebug['errorCode'] = 'malformed_state';
             $this->tracyDebug['stateKey'] = $payloadKey;
             $this->sendTracyHeaders();
             http_response_code(400);
@@ -377,7 +392,7 @@ HTML;
         $expectedHash = hash_hmac('sha256', $encoded, $salt);
         if (!hash_equals($expectedHash, $hash)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid HMAC signature.");
-            $this->tracyDebug['error'] = 'Invalid HMAC signature';
+            $this->tracyDebug['errorCode'] = 'bad_hmac';
             $this->tracyDebug['stateKey'] = $payloadKey;
             $this->sendTracyHeaders();
             http_response_code(403);
@@ -391,7 +406,7 @@ HTML;
         $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
         if (!is_array($decoded) || empty($decoded['__cmp'])) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
-            $this->tracyDebug['error'] = 'Invalid state structure';
+            $this->tracyDebug['errorCode'] = 'invalid_state';
             $this->tracyDebug['stateKey'] = $payloadKey;
             $this->sendTracyHeaders();
             http_response_code(400);
@@ -404,7 +419,7 @@ HTML;
 
         if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid Component Class. Class: " . $class);
-            $this->tracyDebug['error'] = 'Invalid component class';
+            $this->tracyDebug['errorCode'] = 'invalid_component';
             $this->tracyDebug['component'] = $class;
             $this->tracyDebug['stateKey'] = $payloadKey;
             $this->sendTracyHeaders();
@@ -413,6 +428,8 @@ HTML;
         }
 
         try {
+            $t0 = microtime(true);
+
             /** @var Component $cmp */
             $cmp = new $class();
 
@@ -425,12 +442,18 @@ HTML;
             }
 
             // Hydrate from $_POST (Also performs full HMAC, Replay, and CSRF verification internally)
+            $tHydrate = microtime(true);
             $cmp->hydrate();
+            $tAfterHydrate = microtime(true);
 
             // Execute Action (Will automatically run the matched action method based on POST payload)
+            $tAction = microtime(true);
             $cmp->executeAction();
+            $tAfterAction = microtime(true);
 
+            $tRender = microtime(true);
             $html = (string) $cmp;
+            $tAfterRender = microtime(true);
 
             // 1. Inject accumulated OOB swaps
             $oob = $this->fragment->getOobSwaps();
@@ -438,6 +461,12 @@ HTML;
                 $html .= "\n" . $oob;
             }
             $this->tracyDebug['oobCount'] = is_array($oob) ? count($oob) : (is_string($oob) && $oob !== '' ? 1 : 0);
+            $this->tracyDebug['timingMs'] = [
+                'hydrate' => (int) round(($tAfterHydrate - $tHydrate) * 1000),
+                'action' => (int) round(($tAfterAction - $tAction) * 1000),
+                'render' => (int) round(($tAfterRender - $tRender) * 1000),
+                'total' => (int) round((microtime(true) - $t0) * 1000),
+            ];
 
             $this->sendTracyHeaders();
 
@@ -469,7 +498,8 @@ HTML;
             return $html;
         } catch (\Throwable $ex) {
             $this->wire('log')->error("HTMX Endpoint Crash: " . $ex->getMessage() . " in " . $ex->getFile() . ":" . $ex->getLine() . "\nTrace: " . $ex->getTraceAsString());
-            $this->tracyDebug['error'] = $ex->getMessage();
+            $this->tracyDebug['errorCode'] = 'exception';
+            $this->tracyDebug['exceptionClass'] = get_class($ex);
             $this->sendTracyHeaders($ex);
 
             // If Tracy is available, also forward the exception to its logger.
@@ -548,7 +578,13 @@ HTML;
 
         $input = $this->wire('input');
 
+        // Correlation id shared across Tracy panel, server logs, and response headers.
+        if (!isset($this->tracyDebug['reqId']) || !$this->tracyDebug['reqId']) {
+            $this->tracyDebug['reqId'] = substr(str_replace('.', '', uniqid('hx', true)), 0, 24);
+        }
+
         $defaults = [
+            'reqId' => $this->tracyDebug['reqId'],
             'isHtmx' => (bool) $this->request->isHtmx(),
             'isBoosted' => (bool) $this->request->isBoosted(),
             'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
@@ -560,11 +596,15 @@ HTML;
             'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
             'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
             'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            // Redacted: never include raw values from POST.
+            'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
             'component' => $this->tracyDebug['component'] ?? null,
             'action' => ($this->tracyDebug['action'] ?? null) ?? ($input ? ($input->post('hx__action') ?: $input->get('hx__action')) : null),
             'stateKey' => $this->tracyDebug['stateKey'] ?? null,
             'oobCount' => $this->tracyDebug['oobCount'] ?? null,
-            'error' => $this->tracyDebug['error'] ?? null,
+            'errorCode' => $this->tracyDebug['errorCode'] ?? null,
+            'exceptionClass' => $this->tracyDebug['exceptionClass'] ?? null,
+            'timingMs' => $this->tracyDebug['timingMs'] ?? null,
         ];
 
         // Merge without overriding endpoint-provided values.
@@ -584,6 +624,7 @@ HTML;
         if (!$this->request || !$this->request->isHtmx()) return;
         if (headers_sent()) return;
 
+        $this->primeTracyDebugContext();
         $d = $this->tracyDebug ?: [];
 
         // Keep values short and header-safe.
@@ -594,17 +635,23 @@ HTML;
         };
 
         header('X-PW-HTMX: 1');
+        if (!empty($d['reqId'])) header('X-PW-HTMX-ReqId: ' . $safe($d['reqId']));
         if (!empty($d['component'])) header('X-PW-HTMX-Component: ' . $safe($d['component']));
         if (!empty($d['action'])) header('X-PW-HTMX-Action: ' . $safe($d['action']));
         if (!empty($d['target'])) header('X-PW-HTMX-Target: ' . $safe($d['target']));
         if (!empty($d['stateKey'])) header('X-PW-HTMX-StateKey: ' . $safe($d['stateKey']));
         if (isset($d['oobCount'])) header('X-PW-HTMX-OOB: ' . $safe($d['oobCount']));
 
+        if (!empty($d['errorCode'])) {
+            header('X-PW-HTMX-Error-Code: ' . $safe($d['errorCode']));
+        }
+
+        // Redaction policy: do not expose full exception messages in headers.
+        // Use Tracy logs / HTML comments (debug mode) for detailed diagnostics.
         if ($ex) {
-            header('X-PW-HTMX-Error: ' . $safe($ex->getMessage()));
             header('X-PW-HTMX-Exception: ' . $safe(get_class($ex)));
-        } elseif (!empty($d['error'])) {
-            header('X-PW-HTMX-Error: ' . $safe($d['error']));
+        } elseif (!empty($d['exceptionClass'])) {
+            header('X-PW-HTMX-Exception: ' . $safe($d['exceptionClass']));
         }
     }
 

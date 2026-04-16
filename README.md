@@ -75,6 +75,26 @@ This module supports **instance-specific state keys** to avoid collisions:
 - Ensure your HTMX request uses a matching `hx-target` (so the server can resolve the correct payload).
 - The endpoint will prefer `hx__state__{HX-Target}` when present, and fall back to `hx__state`.
 
+### Best Practice Snippet (Multiple Components in One Form)
+
+```php
+// Example: render two independent components inside the same ProcessWire form.
+// Key idea: make hx-target unique and set an instance-specific state key that matches it.
+
+$targetId = 'blocks-editor-body';
+
+/** @var \Htmx\Component\SomeComponent $cmp */
+$cmp = new \Htmx\Component\SomeComponent();
+$cmp->setStateKey('hx__state__' . $targetId);
+
+echo "<div id='{$targetId}'>";
+echo "<form hx-post='{$cmp->requestUrl()}' hx-target='#{$targetId}' hx-swap='outerHTML'>";
+echo $cmp->renderStatePayload();
+echo $cmp; // or $htmx->renderComponent(...)
+echo "</form>";
+echo "</div>";
+```
+
 ## 🌐 Subdirectory Installs & Endpoint URLs
 
 For ProcessWire installs living in a subdirectory (where `config()->urls->root` is not `/`), `Component::requestUrl()` will automatically prefix the endpoint with the install root for client-side URL correctness (unless you provide an absolute URL).
@@ -93,12 +113,14 @@ When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is i
 - Adds a **Tracy bar panel** named **HTMX** with request/endpoint details.
 - Emits **debug response headers** on HTMX requests (useful in the browser Network tab):
   - `X-PW-HTMX`
+  - `X-PW-HTMX-ReqId`
   - `X-PW-HTMX-Component`
   - `X-PW-HTMX-Action`
   - `X-PW-HTMX-Target`
   - `X-PW-HTMX-StateKey`
   - `X-PW-HTMX-OOB`
-  - `X-PW-HTMX-Error` / `X-PW-HTMX-Exception` (on endpoint exceptions)
+  - `X-PW-HTMX-Error-Code` (stable error identifiers)
+  - `X-PW-HTMX-Exception` (exception class, no message redaction)
 
 This integration is **never active in production** unless `config->debug` is enabled.
 
