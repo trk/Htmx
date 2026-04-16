@@ -122,6 +122,26 @@ When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is i
   - `X-PW-HTMX-Error-Code` (stable error identifiers)
   - `X-PW-HTMX-Exception` (exception class, no message redaction)
 
+### Error Codes (`X-PW-HTMX-Error-Code`)
+
+These values are designed to be stable and safe to expose in headers (no sensitive payload data):
+
+- `not_post` — endpoint called with a non-POST request
+- `missing_state` — missing `hx__state` (or `hx__state__{target}`) payload in POST
+- `malformed_state` — state payload did not match the expected `{base64}|{hmac}` format
+- `bad_hmac` — HMAC signature did not match (tampering or wrong salt)
+- `invalid_state` — decoded state structure missing `__cmp` or invalid payload structure
+- `invalid_component` — resolved component class missing or not a valid `Totoglu\Htmx\Component`
+- `exception` — unhandled exception during hydrate/action/render
+
+### Client Debug Toggle (Admin / Debug Only)
+
+In admin pages, when `config->debug` is enabled, the module loads `pw-htmx-debug.js`. It is a no-op unless you explicitly enable it:
+
+```js
+window.__pwHtmxDebug = true;
+```
+
 This integration is **never active in production** unless `config->debug` is enabled.
 
 ## 🪄 Zero-Configuration Auto-Discovery
