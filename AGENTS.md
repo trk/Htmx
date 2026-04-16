@@ -97,6 +97,14 @@ Access via `$this->htmx` available anywhere in Component and Ui.
 
 When `config->debug` is enabled and the **TracyDebugger** module is installed, Htmx can expose an HTMX panel in the Tracy bar and emit debug response headers for HTMX requests (controlled by the `tracySupport` module config option, default: enabled). This must never be relied on for production logic.
 
+Key details:
+
+- **Redaction policy:** even in debug mode, the module must not dump full state payloads or POST values. The panel/headers should remain metadata-only (POST keys, component, action, target, stateKey, OOB count, etc.).
+- **Correlation id:** each HTMX request gets a `reqId` and a response header `X-PW-HTMX-ReqId` so the Tracy panel, logs, and browser Network tab can be correlated.
+- **Stable error codes:** on endpoint failures, the module emits `X-PW-HTMX-Error-Code` (e.g. `missing_state`, `bad_hmac`, `invalid_component`, `exception`) rather than leaking exception messages.
+- **Timing:** in debug mode, endpoint timing information may be present in the Tracy panel (hydrate/action/render/total ms).
+- **Client debug helper (admin/debug only):** `pw-htmx-debug.js` is loaded in admin when debug is enabled, but it is a no-op unless `window.__pwHtmxDebug === true`.
+
 ### Request API (`$this->htmx->request`)
 
 - `isHtmx()`: bool (Is this an HX-Request?)
