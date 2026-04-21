@@ -502,4 +502,21 @@ abstract class Component extends WireData
             return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
         }
     }
+
+    /**
+     * Render the component and let exceptions bubble up to the caller.
+     * Use this in debugging or when the endpoint wants to record exceptions (e.g. Tracy).
+     */
+    public function renderToString(): string
+    {
+        if (!$this->renderReady()) {
+            return '';
+        }
+
+        $this->beforeRender();
+        $html = $this->render();
+        $this->afterRender($html);
+
+        return $html;
+    }
 }

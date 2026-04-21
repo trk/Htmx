@@ -452,7 +452,8 @@ HTML;
             $tAfterAction = microtime(true);
 
             $tRender = microtime(true);
-            $html = (string) $cmp;
+            // Avoid __toString() here (it swallows exceptions). Let errors bubble for debugging.
+            $html = $cmp->renderToString();
             $tAfterRender = microtime(true);
 
             // 1. Inject accumulated OOB swaps
@@ -508,6 +509,11 @@ HTML;
                     \Tracy\Debugger::log($ex);
                 } catch (\Throwable $ignore) {
                 }
+            }
+
+            // In debug + Tracy, rethrow to let Tracy render the error screen.
+            if ($this->isTracySupportEnabled() && $this->wire('config')->debug) {
+                throw $ex;
             }
             http_response_code(500);
             if ($this->wire('config')->debug) {
