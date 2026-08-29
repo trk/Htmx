@@ -38,10 +38,13 @@ class Htmx extends WireData implements Module, ConfigurableModule
     public $fragment;
 
     /** @var array<string, string> component alias map */
-    protected $components = [];
+    protected array $components = [];
 
     /** @var array<string> Valid and checked paths to components and UI that are allowed for rendering */
-    public $allowedComponentPaths = [];
+    public array $allowedComponentPaths = [];
+
+    /** @var array<string, bool> Tracks which short-name aliases have already been registered (perf guard) */
+    private array $registeredAliases = [];
 
     /**
      * Internal debug info for Tracy panel / response headers (per request).
@@ -183,7 +186,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
             // 1. Target Auto-Extraction (Partial Render)
             if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
                 $targetId = $this->request->target();
-                if ($targetId && strpos($html, 'id="' . $targetId . '"') !== false) {
+                // Strict ID validation to prevent DOM/XPath injection. HX-Target is user-controlled.
+                if ($targetId && preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $targetId) && strpos($html, 'id="' . $targetId . '"') !== false) {
                     try {
                         libxml_use_internal_errors(true);
                         $dom = new \DOMDocument();
@@ -191,8 +195,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
                         $encodedHtml = mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8');
                         if (@$dom->loadHTML('<?xml encoding="utf-8" ?>' . $encodedHtml, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
                             $xpath = new \DOMXPath($dom);
-                            $nodes = $xpath->query("//*[@id='$targetId']");
-                            if ($nodes->length > 0) {
+                            // Use XPath with properly escaped ID via double-quoted attribute and manual single-quote rejection
+                            // The regex above already rejects single-quotes; this is defense-in-depth.
+                            $safeId = htmlspecialchars($targetId, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+                            $nodes = $xpath->query("//*[@id=\"{$safeId}\"]");
+                            if ($nodes && $nodes->length > 0) {
                                 // Re-decode entities internally generated during parsing
                                 $html = html_entity_decode($dom->saveHTML($nodes->item(0)));
                             }
@@ -310,6 +317,12 @@ HTML;
     public function handleEndpoint(\ProcessWire\HookEvent $e)
     {
         $input = $this->wire('input');
+        if ($input === null) {
+            $this->tracyDebug['errorCode'] = 'no_input';
+            $this->sendTracyHeaders();
+            http_response_code(500);
+            return "Internal Server Error";
+        }
 
         // Prime Tracy debug payload (per-request)
         $this->tracyDebug = [
@@ -693,7 +706,11 @@ HTML;
             // Components with their own endpoint ($cmp->setEndpointUrl()) are not registered.
             if ($cmp->requestUrl() === $this->endpointUrl) {
                 $shortName = (new \ReflectionClass($cmp))->getShortName();
-                $this->registerComponent($shortName, $class);
+                // Perf guard: avoid repeated Reflection + array write when the same alias is already registered.
+                if (!isset($this->registeredAliases[$shortName]) || ($this->components[$shortName] ?? null) !== $class) {
+                    $this->registerComponent($shortName, $class);
+                    $this->registeredAliases[$shortName] = true;
+                }
             }
             if ($view !== null) {
                 $cmp->setView($view);

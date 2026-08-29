@@ -56,15 +56,15 @@ abstract class Ui
         $this->htmx = wire('htmx');
 
         // Handle parameters
-        $this->parameters = $parameters instanceof ParameterBag 
-            ? $parameters 
+        $this->parameters = $parameters instanceof ParameterBag
+            ? $parameters
             : new ParameterBag($parameters);
 
         $this->parameters->defaults($this->defaultParams);
 
         // Handle attributes
-        $this->attributes = $attributes instanceof AttributeBag 
-            ? $attributes 
+        $this->attributes = $attributes instanceof AttributeBag
+            ? $attributes
             : new AttributeBag($attributes);
     }
 
@@ -216,6 +216,25 @@ abstract class Ui
     public function _(string $script): self
     {
         return $this->hyperscript($script);
+    }
+
+    /**
+     * DX helper: pass translation calls through to ProcessWire's global translator when available.
+     * Falls back to the raw text when the ProcessWire API is not reachable.
+     *
+     * Usage inside Ui render(): $this->__('Click Me')
+     */
+    public function __(string $text, string $textdomain = 'site-htmx'): string
+    {
+        try {
+            $func = '\ProcessWire\__';
+            if (function_exists($func)) {
+                return (string) $func($text, $textdomain);
+            }
+        } catch (\Throwable $e) {
+            // fall through
+        }
+        return $text;
     }
 
     /**
@@ -385,8 +404,9 @@ abstract class Ui
             $this->afterRender($html);
             return $html;
         } catch (\Throwable $e) {
-            if (wire('config')->debug) {
-                return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>{$e->getMessage()}</p></div>";
+            $config = wire('config');
+            if ($config && $config->debug) {
+                return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>" . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p></div>";
             }
             return '';
         }

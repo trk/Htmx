@@ -27,11 +27,12 @@ class TestAmnesiacBadge extends Ui
             $this->attributes->addClass('bg-blue-100 text-blue-800 border-blue-200');
         }
         
-        // Output label localized via hyperscript-compatible _() function or direct param translation
+        // Output label localized via translation function
         $label = $this->parameters->getString('label');
         if ($label === 'Unknown') {
-            $label = $this->_('Unknown Attribute'); // Wrapping default fallback text
+            $label = $this->__('Unknown Attribute');
         }
+        $label = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
         
         // Render combined attribute bag safely
         return "<span {$this->attributes->render()}>{$label}</span>";
