@@ -2,20 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Totoglu\Htmx;
+namespace Htmx\Component;
+
+use Totoglu\Htmx\Component;
 
 class TestAmnesiacComponent extends Component 
 {
-    // NO private/protected state! 
     public int $counter = 0;
     
-    // Mount instead of __construct
     public function mount(): void 
     {
         $this->counter = 10;
     }
     
-    // Fill instead of __construct for parsing inputs
     public function fill(array $props): self 
     {
         if (isset($props['start'])) {
@@ -25,35 +24,32 @@ class TestAmnesiacComponent extends Component
         return $this;
     }
 
-    // Public method, acting as an action
-    // NO setState() usage! Direct mutation of public property!
     public function increment(): void 
     {
         $this->counter++;
         
-        // Demonstrate HTMX Response API: trigger a custom event globally
         $this->htmx->response->trigger('countUpdated', ['counter' => $this->counter]);
         
-        // Demonstrate HTMX Fragment API: out-of-band swap to update another element automatically
-        $msg = $this->_('Counter is now');
+        $msg = htmlspecialchars($this->__('Counter is now'), ENT_QUOTES, 'UTF-8');
         $this->htmx->fragment->addOobSwap('#some-other-div', "<div id='some-other-div'>{$msg}: {$this->counter}</div>");
     }
 
     public function render(): string 
     {
+        $vals = json_encode(['hx__action' => 'increment']);
+        $currentCount = (int) $this->counter;
+        $buttonLabel = htmlspecialchars($this->__('Increment'), ENT_QUOTES, 'UTF-8');
+        
         return <<<HTML
-        <div id="test-component" {$this->attributes->render()}>
-            <!-- Direct access to public property state -->
-            Current count: {$this->counter}
+        <div id="hxc_{$this->id()}">
+            Current count: {$currentCount}
             
-            <button 
-                hx-post="{$this->action('increment')}" 
-                hx-target="#test-component">
-                {$this->_('Increment')}
-            </button>
-            
-            <!-- Output raw state payload for automatic signing logic -->
-            {$this->renderStatePayload()}
+            <form hx-post="{$this->requestUrl()}" hx-target="#hxc_{$this->id()}" hx-swap="outerHTML" hx-vals='{$vals}'>
+                {$this->renderStatePayload()}
+                <button type="submit" class="uk-button uk-button-primary">
+                    {$buttonLabel}
+                </button>
+            </form>
         </div>
         HTML;
     }
