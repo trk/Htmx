@@ -83,6 +83,22 @@ class Request extends WireData
     public function validateCsrf(bool $throwException = false): bool
     {
         $session = $this->wire('session');
+
+        // Null-safe guards: Session or CSRF manager may be unavailable in CLI / bootstrap issues.
+        if ($session === null || !isset($session->CSRF) || !is_object($session->CSRF)) {
+            if ($throwException) {
+                throw new \ProcessWire\WirePermissionException("CSRF Validation Failed: Session CSRF manager unavailable.");
+            }
+            return false;
+        }
+
+        if (!method_exists($session->CSRF, 'hasValidToken')) {
+            if ($throwException) {
+                throw new \ProcessWire\WirePermissionException("CSRF Validation Failed: CSRF manager incompatible.");
+            }
+            return false;
+        }
+
         $valid = $session->CSRF->hasValidToken();
 
         if (!$valid && $throwException) {
@@ -94,9 +110,70 @@ class Request extends WireData
 
     /**
      * Helper to read a specific server header safely.
+     *
+     * Resolution order (for CDN/proxy/rewrite compatibility):
+     *   1. ProcessWire $input->getHeader() if available
+     *   2. Native getallheaders() (RFC 3875 case-insensitive matching)
+     *   3. $_SERVER[$name] raw CGI fallback
+     *
+     * Accepts both $_SERVER-style names ("HTTP_HX_REQUEST") and canonical names ("HX-Request").
      */
     private function getHeader(string $name): ?string
     {
-        return isset($_SERVER[$name]) ? (string)$_SERVER[$name] : null;
+        // 1. Normalize: derive canonical header name for getallheaders/InputfieldHttp
+        //    HTTP_HX_REQUEST -> HX-Request
+        $canonical = $name;
+        if (strpos($name, 'HTTP_') === 0) {
+            $canonical = substr($name, 5);
+            $canonical = str_replace('_', '-', $canonical);
+        }
+
+        // 2. ProcessWire Input API (available since PW 3.0.178 / 3.0.229)
+        $input = $this->wire('input');
+        if ($input && method_exists($input, 'getHeader')) {
+            try {
+                $value = $input->getHeader($canonical);
+                if ($value !== null && $value !== '') {
+                    return is_string($value) ? $value : (string) $value;
+                }
+                $value = $input->getHeader($name);
+                if ($value !== null && $value !== '') {
+                    return is_string($value) ? $value : (string) $value;
+                }
+            } catch (\Throwable $e) {
+                // fall through to polyfills
+            }
+        }
+
+        // 3. Native getallheaders() polyfill — works with Apache/PHP-FPM/Litespeed,
+        //    properly populates even with rewritten proxied requests
+        if (function_exists('getallheaders')) {
+            $headers = @getallheaders();
+            if (is_array($headers) && !empty($headers)) {
+                // Case-insensitive lookup: HX-Request, hx-request, X-Forwarded-For etc.
+                foreach ($headers as $k => $v) {
+                    if (is_string($k) && strcasecmp($k, $canonical) === 0) {
+                        return is_string($v) ? $v : (string) $v;
+                    }
+                    if (is_string($k) && strcasecmp($k, $name) === 0) {
+                        return is_string($v) ? $v : (string) $v;
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback: raw $_SERVER lookup (original CGI names like HTTP_HX_REQUEST)
+        if (isset($_SERVER[$name]) && is_scalar($_SERVER[$name])) {
+            return (string) $_SERVER[$name];
+        }
+
+        // 5. Also try the canonical name prefixed with HTTP_ in $_SERVER
+        //    (in case caller passed HX-Request style)
+        $httpKey = 'HTTP_' . strtoupper(str_replace('-', '_', $canonical));
+        if ($httpKey !== $name && isset($_SERVER[$httpKey]) && is_scalar($_SERVER[$httpKey])) {
+            return (string) $_SERVER[$httpKey];
+        }
+
+        return null;
     }
 }
