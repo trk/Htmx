@@ -18,11 +18,19 @@ class Response extends WireData
     private array $oobSwaps = [];
 
     /**
+     * Strip CR/LF characters from header values to prevent header injection.
+     */
+    private function safeHeaderValue(string $value): string
+    {
+        return str_replace(["\r", "\n", "\0"], '', $value);
+    }
+
+    /**
      * Send a client-side redirect.
      */
     public function redirect(string $url): self
     {
-        header('HX-Redirect: ' . $url);
+        header('HX-Redirect: ' . $this->safeHeaderValue($url));
         return $this;
     }
 
@@ -40,7 +48,7 @@ class Response extends WireData
      */
     public function pushUrl(string|bool $url): self
     {
-        $val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+        $val = is_bool($url) ? ($url ? 'true' : 'false') : $this->safeHeaderValue($url);
         header('HX-Push-Url: ' . $val);
         return $this;
     }
@@ -50,7 +58,7 @@ class Response extends WireData
      */
     public function replaceUrl(string|bool $url): self
     {
-        $val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+        $val = is_bool($url) ? ($url ? 'true' : 'false') : $this->safeHeaderValue($url);
         header('HX-Replace-Url: ' . $val);
         return $this;
     }
@@ -60,7 +68,7 @@ class Response extends WireData
      */
     public function retarget(string $selector): self
     {
-        header('HX-Retarget: ' . $selector);
+        header('HX-Retarget: ' . $this->safeHeaderValue($selector));
         return $this;
     }
 
@@ -69,7 +77,7 @@ class Response extends WireData
      */
     public function reswap(string $modifier): self
     {
-        header('HX-Reswap: ' . $modifier);
+        header('HX-Reswap: ' . $this->safeHeaderValue($modifier));
         return $this;
     }
 
@@ -78,8 +86,8 @@ class Response extends WireData
      */
     public function location(string|array $url): self
     {
-        $val = is_array($url) ? json_encode($url) : $url;
-        header('HX-Location: ' . $val);
+        $val = is_array($url) ? json_encode($url) : $this->safeHeaderValue($url);
+        header('HX-Location: ' . $this->safeHeaderValue($val));
         return $this;
     }
 
@@ -123,8 +131,13 @@ class Response extends WireData
             $payload[$name] = $data ?? '';
         }
 
-        // Apply via PHP header
-        header(sprintf('%s: %s', $header, json_encode($payload)));
+        // JSON encode is inherently header-safe (no raw newlines), but double-check.
+        $encoded = json_encode($payload);
+        if ($encoded === false) {
+            $encoded = '{}';
+        }
+        // Apply via PHP header with safety for header injection (JSON rarely contains CR/LF but defense-in-depth)
+        header(sprintf('%s: %s', $this->safeHeaderValue($header), $this->safeHeaderValue($encoded)));
     }
 
     /**

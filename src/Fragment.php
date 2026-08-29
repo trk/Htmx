@@ -21,7 +21,8 @@ class Fragment extends WireData
 
     private function normalizeHtmlId(string $id): string
     {
-        $id = preg_replace('/[^A-Za-z0-9\-_:.]/', '-', $id) ?? '';
+        $replaced = preg_replace('/[^A-Za-z0-9\-_:.]/', '-', $id);
+        $id = is_string($replaced) ? $replaced : $id;
         $id = trim($id, '-');
         if ($id === '' || !$this->isValidHtmlId($id)) {
             $id = 'hx-' . substr(hash('sha1', $id . microtime(true)), 0, 12);
