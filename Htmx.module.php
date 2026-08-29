@@ -47,6 +47,21 @@ class Htmx extends WireData implements Module, ConfigurableModule
     private array $registeredAliases = [];
 
     /**
+     * Resolve HMAC salt defensively from ProcessWire config.
+     * Throws WireException with clear message if the crypto boundary is violated.
+     */
+    private function getHmacSalt(): string
+    {
+        $config = $this->wire('config');
+        if ($config === null || !isset($config->userAuthSalt) || !is_string($config->userAuthSalt) || $config->userAuthSalt === '') {
+            throw new \ProcessWire\WireException(
+                "HTMX HMAC Salt Missing: config->userAuthSalt must be a non-empty string for Htmx module state signing."
+            );
+        }
+        return $config->userAuthSalt;
+    }
+
+    /**
      * Internal debug info for Tracy panel / response headers (per request).
      * @var array<string, mixed>
      */
@@ -335,14 +350,14 @@ HTML;
             'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
             'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
             'target' => $this->request ? $this->request->target() : null,
-            'trigger' => $_SERVER['HTTP_HX_TRIGGER'] ?? null,
-            'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
-            'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
-            'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            'trigger' => $this->request ? $this->request->header('HX-Trigger') : ($_SERVER['HTTP_HX_TRIGGER'] ?? null),
+            'triggerName' => $this->request ? $this->request->header('HX-Trigger-Name') : ($_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null),
+            'prompt' => $this->request ? $this->request->prompt() : ($_SERVER['HTTP_HX_PROMPT'] ?? null),
+            'currentUrl' => $this->request ? $this->request->header('HX-Current-URL') : ($_SERVER['HTTP_HX_CURRENT_URL'] ?? null),
             // Redacted: only keys, never values.
             'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
             'component' => null,
-            'action' => $input->post('hx__action') ?: $input->get('hx__action'),
+            'action' => $input->post('hx__action'),
             'stateKey' => null,
             'oobCount' => null,
             'errorCode' => null,
@@ -402,7 +417,16 @@ HTML;
         }
 
         list($encoded, $hash) = $parts;
-        $salt = $this->wire('config')->userAuthSalt;
+        try {
+            $salt = $this->getHmacSalt();
+        } catch (\Throwable $e) {
+            $this->wire('log')->error("HTMX Endpoint Failed: " . $e->getMessage());
+            $this->tracyDebug['errorCode'] = 'missing_salt';
+            $this->tracyDebug['stateKey'] = $payloadKey;
+            $this->sendTracyHeaders();
+            http_response_code(500);
+            return "Internal Server Error: Module crypto configuration missing.";
+        }
         $expectedHash = hash_hmac('sha256', $encoded, $salt);
         if (!hash_equals($expectedHash, $hash)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid HMAC signature.");
@@ -414,11 +438,11 @@ HTML;
         }
 
         // Decrypt & Validate payload class to boot it up
-        // (Note: $cmp->hydrate() performs strict HMAC/Replay checks again, 
+        // (Note: $cmp->hydrate() performs strict HMAC/Replay checks again,
         // but we need to know WHICH class to instantiate first securely)
         $decodedJson = base64_decode($encoded, true);
         $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
-        if (!is_array($decoded) || empty($decoded['__cmp'])) {
+        if (!is_array($decoded) || empty($decoded['__cmp']) || !is_string($decoded['__cmp'])) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
             $this->tracyDebug['errorCode'] = 'invalid_state';
             $this->tracyDebug['stateKey'] = $payloadKey;
@@ -429,7 +453,27 @@ HTML;
 
         $class = $decoded['__cmp'];
 
-        $class = $this->components[$class] ?? $class;
+        // Resolve short-name alias if present.
+        $aliasLookup = $this->components[$class] ?? null;
+        if (is_string($aliasLookup)) {
+            $class = $aliasLookup;
+        } else {
+            // If the caller supplied a fully-qualified class name directly,
+            // accept it ONLY if it has been whitelisted via the alias map
+            // (i.e. registered as an alias VALUE at render time).
+            // Components that use a custom setEndpointUrl() are intentionally
+            // excluded from the global endpoint map — they are routed elsewhere.
+            $knownFullNames = array_flip(array_values($this->components));
+            if (!isset($knownFullNames[$class])) {
+                $this->wire('log')->error("HTMX Endpoint Failed: Component not registered with global endpoint. Class: " . $class);
+                $this->tracyDebug['errorCode'] = 'component_unregistered';
+                $this->tracyDebug['component'] = $class;
+                $this->tracyDebug['stateKey'] = $payloadKey;
+                $this->sendTracyHeaders();
+                http_response_code(400);
+                return "Bad Request: Component not registered for the global HTMX endpoint.";
+            }
+        }
 
         if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
             $this->wire('log')->error("HTMX Endpoint Failed: Invalid Component Class. Class: " . $class);
@@ -475,7 +519,16 @@ HTML;
             if (!empty($oob)) {
                 $html .= "\n" . $oob;
             }
-            $this->tracyDebug['oobCount'] = is_array($oob) ? count($oob) : (is_string($oob) && $oob !== '' ? 1 : 0);
+            // getOobSwaps() returns a "\n"-joined string of registered OOB swaps
+            // produced by Fragment::addOobSwap() entries.
+            // Split on the glue only when non-empty; otherwise count = 0.
+            if ($oob === '' || $oob === null) {
+                $oobCount = 0;
+            } else {
+                $oobSplit = preg_split('/\R+/', trim((string) $oob), -1, PREG_SPLIT_NO_EMPTY);
+                $oobCount = is_array($oobSplit) ? count($oobSplit) : 1;
+            }
+            $this->tracyDebug['oobCount'] = $oobCount;
             $this->tracyDebug['timingMs'] = [
                 'hydrate' => (int) round(($tAfterHydrate - $tHydrate) * 1000),
                 'action' => (int) round(($tAfterAction - $tAction) * 1000),
