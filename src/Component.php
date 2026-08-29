@@ -47,6 +47,11 @@ abstract class Component extends WireData
      */
     protected ?Htmx $htmx = null;
 
+    /**
+     * @var array<class-string, ReflectionClass> Local reflection cache per class hierarchy
+     */
+    private static array $reflectionCache = [];
+
     public function __construct()
     {
         parent::__construct();
@@ -55,17 +60,89 @@ abstract class Component extends WireData
     }
 
     /**
+     * Helper to get or cache the ReflectionClass for this instance's class.
+     */
+    protected static function getReflection(): ReflectionClass
+    {
+        $class = static::class;
+        if (!isset(self::$reflectionCache[$class])) {
+            self::$reflectionCache[$class] = new ReflectionClass($class);
+        }
+        return self::$reflectionCache[$class];
+    }
+
+    /**
+     * Accessor for the component's unique instance ID.
+     * Matches the documented DX from templates/stubs as $this->id().
+     */
+    public function id(): string
+    {
+        return $this->id;
+    }
+
+    /**
      * Helper to mass-assign properties to the component
+     * Uses type coercion for strict_types compatibility with public typed properties.
      */
     public function fill(array $props): self
     {
-        $ref = new ReflectionClass($this);
+        $ref = self::getReflection();
         foreach ($props as $k => $v) {
-            if ($ref->hasProperty($k) && $ref->getProperty($k)->isPublic()) {
-                $this->{$k} = $v;
+            if ($ref->hasProperty($k)) {
+                $prop = $ref->getProperty($k);
+                if ($prop->isPublic()) {
+                    $propType = $prop->getType();
+                    if ($propType instanceof ReflectionNamedType && !$propType->isBuiltin()) {
+                        $this->{$k} = $v;
+                    } else {
+                        $this->{$k} = $this->coerceValue($v, $propType);
+                    }
+                }
             }
         }
         return $this;
+    }
+
+    /**
+     * Coerce a mixed value to a named scalar type for strict_types compatibility.
+     */
+    private function coerceValue(mixed $value, ?\ReflectionType $type): mixed
+    {
+        if (!$type instanceof ReflectionNamedType || !$type->isBuiltin()) {
+            return $value;
+        }
+        $typeName = $type->getName();
+        $isArr = is_array($value);
+
+        if ($typeName === 'int') {
+            if ($isArr) return 0;
+            if (is_bool($value)) return (int) $value;
+            return is_numeric($value) ? (int) $value : ($value === null && $type->allowsNull() ? null : 0);
+        }
+        if ($typeName === 'float') {
+            if ($isArr) return 0.0;
+            if (is_bool($value)) return (float) $value;
+            return is_numeric($value) ? (float) $value : ($value === null && $type->allowsNull() ? null : 0.0);
+        }
+        if ($typeName === 'bool') {
+            if ($isArr) return false;
+            return $value === null && $type->allowsNull() ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        }
+        if ($typeName === 'string') {
+            if ($isArr) return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($value === null && $type->allowsNull()) return null;
+            return (string) $value;
+        }
+        if ($typeName === 'array') {
+            if ($isArr) return $value;
+            if ($value === null && $type->allowsNull()) return null;
+            return [$value];
+        }
+        if ($typeName === 'mixed') {
+            return $value;
+        }
+
+        return $value;
     }
 
     /**
@@ -127,7 +204,8 @@ abstract class Component extends WireData
                 $expectedHash = hash_hmac('sha256', $encoded, $salt);
 
                 if (hash_equals($expectedHash, $hash)) {
-                    $decoded = json_decode(base64_decode($encoded), true);
+                    $decodedJson = base64_decode($encoded, true);
+                    $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
                     if (is_array($decoded)) {
 
                         // 1. Replay Attack Protection Check
@@ -145,7 +223,7 @@ abstract class Component extends WireData
                             $this->id = $decoded['__id'];
                         }
 
-                        // 4. Auto-Map Public Properties
+                        // 4. Auto-Map Public Properties (with strict type coercion)
                         $this->mapStateToProperties($decoded);
                     }
                 } else {
@@ -199,6 +277,9 @@ abstract class Component extends WireData
     public function executeAction(string $actionParam = 'hx__action'): bool
     {
         $input = $this->wire('input');
+        if ($input === null) {
+            return false;
+        }
 
         // Actions (State Mutations) MUST be POST requests only.
         // This inherently prevents GET-based CSRF bypasses since CSRF tokens are validated below.
@@ -207,9 +288,12 @@ abstract class Component extends WireData
         }
 
         // Enforce CSRF token validation on any State Mutation via POST
-        if ($input->requestMethod('POST') && $this->wire('session') && $this->wire('session')->CSRF) {
-            // Validate throws standard WireCSRFException automatically if token missing/invalid
-            $this->wire('session')->CSRF->validate();
+        if ($input->requestMethod('POST')) {
+            $session = $this->wire('session');
+            if ($session && $session->CSRF) {
+                // Validate throws standard WireCSRFException automatically if token missing/invalid
+                $session->CSRF->validate();
+            }
         }
 
         // Strictly resolve action ONLY from POST payload
@@ -219,7 +303,7 @@ abstract class Component extends WireData
             return false;
         }
 
-        $ref = new ReflectionClass($this);
+        $ref = self::getReflection();
         if ($ref->hasMethod($action)) {
             $method = $ref->getMethod($action);
 
@@ -243,8 +327,9 @@ abstract class Component extends WireData
                         if (strpos($className, 'ProcessWire\\') === 0) {
                             $shortName = substr(strrchr('\\' . $className, '\\'), 1);
                             $apiName = strtolower($shortName);
-                            if ($this->wire($apiName)) {
-                                $val = $this->wire($apiName);
+                            $apiVal = $this->wire($apiName);
+                            if ($apiVal) {
+                                $val = $apiVal;
                             }
                         }
                     } else {
@@ -270,7 +355,7 @@ abstract class Component extends WireData
                         }
                     }
 
-                    // 3. Fallback to default values
+                    // 4. Fallback to default values
                     if ($val === null && $param->isDefaultValueAvailable()) {
                         $val = $param->getDefaultValue();
                     }
@@ -296,7 +381,7 @@ abstract class Component extends WireData
     private function buildStateFromProperties(): array
     {
         $state = [];
-        $ref = new ReflectionClass($this);
+        $ref = self::getReflection();
         foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
             $name = $prop->getName();
             // Skip uninitialized
@@ -313,8 +398,12 @@ abstract class Component extends WireData
                     $state[$name] = ['__wire_model' => 'PageArray', 'ids' => $val->explode('id')];
                     continue;
                 } else {
-                    if ($this->wire('config')->debug) {
-                        $this->wire('log')->warning("Component State: Unrecognized Object Type (" . get_class($val) . ") for property '{$name}' cannot be dehydrated securely.");
+                    $config = $this->wire('config');
+                    if ($config && $config->debug) {
+                        $log = $this->wire('log');
+                        if ($log) {
+                            $log->warning("Component State: Unrecognized Object Type (" . get_class($val) . ") for property '{$name}' cannot be dehydrated securely.");
+                        }
                     }
                     continue; // Skip unsupported objects safely
                 }
@@ -330,10 +419,11 @@ abstract class Component extends WireData
 
     /**
      * Uses Reflection to map state variables back to public properties.
+     * Applies type coercion to ensure strict_types compatibility.
      */
     private function mapStateToProperties(array $state): void
     {
-        $ref = new ReflectionClass($this);
+        $ref = self::getReflection();
         foreach ($state as $k => $v) {
             // Internal metadata keys should never map to properties
             if (is_string($k) && strpos($k, '__') === 0) continue;
@@ -344,24 +434,34 @@ abstract class Component extends WireData
 
                     // 1. ProcessWire Object Synthesis (Hydration)
                     if (is_array($v) && isset($v['__wire_model'])) {
+                        $pages = $this->wire('pages');
+                        if ($pages === null) {
+                            continue;
+                        }
                         if ($v['__wire_model'] === 'Page' && isset($v['id'])) {
-                            $page = $this->wire('pages')->get((int)$v['id']);
+                            $page = $pages->get((int)$v['id']);
                             if ($page->id) {
                                 $prop->setValue($this, $page);
                             }
                             continue;
                         } elseif ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids'])) {
                             $ids = array_map('intval', $v['ids']);
-                            $pages = $this->wire('pages')->getById($ids);
-                            if ($pages instanceof PageArray) {
-                                $prop->setValue($this, clone $pages);
+                            $foundPages = $pages->getById($ids);
+                            if ($foundPages instanceof PageArray) {
+                                $prop->setValue($this, clone $foundPages);
                             }
                             continue;
                         }
                     }
 
-                    // 2. Primitive type coercion if defined, but loosely is fine for PHP 8+ strictness mostly
-                    $prop->setValue($this, $v);
+                    // 2. Primitive type coercion for strict_types compatibility
+                    $propType = $prop->getType();
+                    if (is_object($v) || ($propType instanceof ReflectionNamedType && !$propType->isBuiltin())) {
+                        $prop->setValue($this, $v);
+                    } else {
+                        $coerced = $this->coerceValue($v, $propType);
+                        $prop->setValue($this, $coerced);
+                    }
                 }
             }
         }
@@ -409,7 +509,7 @@ abstract class Component extends WireData
                 if (is_file($file)) {
                     // Extract public properties so they are available as local variables in the view
                     $vars = ['component' => $this];
-                    $ref = new ReflectionClass($this);
+                    $ref = self::getReflection();
                     foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
                         if ($prop->isInitialized($this)) {
                             $vars[$prop->getName()] = $prop->getValue($this);
@@ -417,17 +517,22 @@ abstract class Component extends WireData
                     }
 
                     $options = [];
-                    if (!empty($this->wire('htmx')->allowedComponentPaths)) {
+                    $htmx = $this->wire('htmx');
+                    if ($htmx && !empty($htmx->allowedComponentPaths)) {
                         $options = [
                             'allowedPaths' => array_merge(
-                                [$this->wire('config')->paths->templates],
-                                $this->wire('htmx')->allowedComponentPaths
+                                [$paths->templates],
+                                $htmx->allowedComponentPaths
                             )
                         ];
                     }
-                    return $this->wire('files')->render($file, $vars, $options);
+                    $files = $this->wire('files');
+                    if ($files) {
+                        return $files->render($file, $vars, $options);
+                    }
                 } else {
-                    if ($this->wire('config')->debug) {
+                    $config = $this->wire('config');
+                    if ($config && $config->debug) {
                         return "<!-- HTMX Component Error: View file not found at " . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . " -->";
                     }
                 }
