@@ -77,6 +77,21 @@ class Request extends WireData
     }
 
     /**
+     * Public accessor for reading a specific HTTP header from the inbound request.
+     *
+     * Accepts both canonical HTTP names ("HX-Trigger") and CGI-style names
+     * ("HTTP_HX_TRIGGER"). Resolves via ProcessWire Input API, native
+     * getallheaders() polyfill, and finally the $_SERVER superglobal for
+     * maximum CDN/proxy/rewrite compatibility.
+     *
+     * Returns NULL if the header is not present.
+     */
+    public function header(string $name): ?string
+    {
+        return $this->getHeader($name);
+    }
+
+    /**
      * Validates ProcessWire's CSRF token for the current POST request.
      * Can optionally throw an exception.
      */

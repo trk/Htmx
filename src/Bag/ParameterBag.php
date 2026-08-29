@@ -130,19 +130,28 @@ class ParameterBag implements \Countable, \IteratorAggregate
     public function getInt(string $key, int $default = 0): int
     {
         $value = $this->get($key, $default);
-        return is_numeric($value) ? (int) $value : $default;
+        if (is_numeric($value)) return (int) $value;
+        // Align strict_types coercion with Component::coerceValue() semantics.
+        if (is_bool($value)) return (int) $value;
+        if (is_array($value)) return $default;
+        return $default;
     }
 
     public function getBool(string $key, bool $default = false): bool
     {
         $value = $this->get($key, $default);
+        if (is_array($value)) return false;
         return filter_var($value, FILTER_VALIDATE_BOOLEAN);
     }
 
     public function getFloat(string $key, float $default = 0.0): float
     {
         $value = $this->get($key, $default);
-        return is_numeric($value) ? (float) $value : $default;
+        if (is_numeric($value)) return (float) $value;
+        // Align strict_types coercion with Component::coerceValue() semantics.
+        if (is_bool($value)) return (float) $value;
+        if (is_array($value)) return $default;
+        return $default;
     }
 
     public function getArray(string $key, array $default = []): array

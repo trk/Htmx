@@ -172,6 +172,21 @@ abstract class Component extends WireData
     }
 
     /**
+     * Get HMAC salt from config with defensive null-safety.
+     * Throws WireException if salt is unavailable (crypto boundary violated).
+     */
+    private function getHmacSalt(): string
+    {
+        $config = $this->wire('config');
+        if ($config === null || !isset($config->userAuthSalt) || !is_string($config->userAuthSalt) || $config->userAuthSalt === '') {
+            throw new WireException(
+                "HTMX HMAC Salt Missing: config->userAuthSalt must be a non-empty string for Htmx Component state signing."
+            );
+        }
+        return $config->userAuthSalt;
+    }
+
+    /**
      * Lifecycle Hook: Executed once during instantiation before render
      * Useful for setting up data if props are passed.
      */
@@ -181,13 +196,40 @@ abstract class Component extends WireData
      * Call this inside your component script/render block to restore state
      * from the incoming HTMX request before processing logic.
      *
+     * State is always read from POST first. GET query-param is ONLY read when
+     * the inbound request is a genuine HTMX HX-Request (defense-in-depth:
+     * accidental plain-HTML <a href> links cannot carry state payloads that
+     * would end up in browser history / access logs / referrer headers).
+     *
      * @param int $ttlHours Default is 24 hours. Payload expires after this time to prevent Replay Attacks.
      */
-    public function hydrate(int $ttlHours = 24)
+    public function hydrate(int $ttlHours = 24): void
     {
         $input = $this->wire('input');
+        if ($input === null) {
+            return;
+        }
 
-        $payload = $input->post($this->stateKey) ?: $input->get($this->stateKey);
+        $payload = $input->post($this->stateKey);
+
+        // Allow GET-carried state only for genuine HTMX requests; never for
+        // plain page visits, crawlers, or accidental link navigations.
+        if ($payload === null || $payload === '' || $payload === false) {
+            try {
+                $htmx = $this->wire('htmx');
+                $isHxRequest = $htmx && method_exists($htmx, 'request')
+                    ? $htmx->request->isHtmx()
+                    : ($input->post('HTTP_HX_REQUEST') === 'true');
+            } catch (\Throwable $e) {
+                $isHxRequest = false;
+            }
+            if ($isHxRequest) {
+                $getPayload = $input->get($this->stateKey);
+                if ($getPayload !== null && $getPayload !== '' && $getPayload !== false) {
+                    $payload = $getPayload;
+                }
+            }
+        }
 
         // In some edge cases (e.g. multiple components within the same form),
         // ProcessWire may provide the payload as an array.
@@ -196,42 +238,47 @@ abstract class Component extends WireData
             $payload = is_string($first) ? $first : null;
         }
 
-        if ($payload) {
-            $parts = explode('|', $payload, 2);
-            if (count($parts) === 2) {
-                list($encoded, $hash) = $parts;
-                $salt = $this->wire('config')->userAuthSalt;
-                $expectedHash = hash_hmac('sha256', $encoded, $salt);
+        if (!is_string($payload) || $payload === '') {
+            return;
+        }
 
-                if (hash_equals($expectedHash, $hash)) {
-                    $decodedJson = base64_decode($encoded, true);
-                    $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
-                    if (is_array($decoded)) {
+        $parts = explode('|', $payload, 2);
+        if (count($parts) === 2) {
+            [$encoded, $hash] = $parts;
+            if (!is_string($encoded) || $encoded === '' || !is_string($hash) || $hash === '') {
+                throw new WireException("HTMX State Format Invalid: Encoded or HMAC segment is empty.");
+            }
+            $salt = $this->getHmacSalt();
+            $expectedHash = hash_hmac('sha256', $encoded, $salt);
 
-                        // 1. Replay Attack Protection Check
-                        if (isset($decoded['__expires']) && time() > (int)$decoded['__expires']) {
-                            throw new WireException("HTMX State Expired: This payload is no longer valid (Replay Protection).");
-                        }
+            if (hash_equals($expectedHash, $hash)) {
+                $decodedJson = base64_decode($encoded, true);
+                $decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
+                if (is_array($decoded)) {
 
-                        // 2. Cross-Component State Injection Protection
-                        if (!isset($decoded['__cmp']) || $decoded['__cmp'] !== static::class) {
-                            throw new WireException("HTMX Component Tampering Detected: State payload does not belong to this component.");
-                        }
-
-                        // 3. Instance Identity Preservation
-                        if (isset($decoded['__id'])) {
-                            $this->id = $decoded['__id'];
-                        }
-
-                        // 4. Auto-Map Public Properties (with strict type coercion)
-                        $this->mapStateToProperties($decoded);
+                    // 1. Replay Attack Protection Check
+                    if (isset($decoded['__expires']) && time() > (int)$decoded['__expires']) {
+                        throw new WireException("HTMX State Expired: This payload is no longer valid (Replay Protection).");
                     }
-                } else {
-                    throw new WireException("HTMX State Tampering Detected: Invalid HMAC signature.");
+
+                    // 2. Cross-Component State Injection Protection
+                    if (!isset($decoded['__cmp']) || $decoded['__cmp'] !== static::class) {
+                        throw new WireException("HTMX Component Tampering Detected: State payload does not belong to this component.");
+                    }
+
+                    // 3. Instance Identity Preservation
+                    if (isset($decoded['__id']) && is_string($decoded['__id'])) {
+                        $this->id = $decoded['__id'];
+                    }
+
+                    // 4. Auto-Map Public Properties (with strict type coercion)
+                    $this->mapStateToProperties($decoded);
                 }
             } else {
-                throw new WireException("HTMX State Format Invalid: Missing HMAC signature.");
+                throw new WireException("HTMX State Tampering Detected: Invalid HMAC signature.");
             }
+        } else {
+            throw new WireException("HTMX State Format Invalid: Missing HMAC signature.");
         }
     }
 
@@ -253,14 +300,31 @@ abstract class Component extends WireData
         // 3. Instance Isolation (Allows tracking multiple instances of the same component)
         $stateArray['__id'] = $this->id;
 
-        $encoded = base64_encode(json_encode($stateArray ?: []));
-        $salt = $this->wire('config')->userAuthSalt;
+        $jsonPayload = json_encode($stateArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($jsonPayload === false) {
+            $config = $this->wire('config');
+            if ($config && $config->debug) {
+                $log = $this->wire('log');
+                if ($log) {
+                    $log->error('HTMX state json_encode failed: ' . json_last_error_msg());
+                }
+            }
+            $jsonPayload = json_encode([
+                '__expires' => $stateArray['__expires'],
+                '__cmp' => static::class,
+                '__id' => $this->id,
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        $encoded = base64_encode($jsonPayload);
+        $salt = $this->getHmacSalt();
         $hash = hash_hmac('sha256', $encoded, $salt);
         $payload = $encoded . '|' . $hash;
 
         $csrfHtml = '';
-        if ($this->wire('session') && $this->wire('session')->CSRF) {
-            $csrfHtml = $this->wire('session')->CSRF->renderInput() . "\n";
+        $session = $this->wire('session');
+        if ($session && isset($session->CSRF) && is_object($session->CSRF) && method_exists($session->CSRF, 'renderInput')) {
+            $csrfHtml = $session->CSRF->renderInput() . "\n";
         }
 
         return $csrfHtml . sprintf(
