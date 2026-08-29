@@ -86,6 +86,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
         $this->set('autoExtractTargets', false);
         $this->set('allowComponentPaths', false);
         $this->set('oobStrictIdOnly', false);
+        $this->set('oobStrictSwapStyle', true);
         $this->set('lifecycleBridge', true);
         $this->set('lifecycleEventPrefix', 'pw-htmx');
         $this->set('extensions', []);
@@ -929,6 +930,14 @@ HTML;
         $f->label = $this->_('OOB Swaps: Strict ID Only');
         $f->description = $this->_('When enabled, OOB swaps will only accept "#id" or "id" selectors. Other selectors will be ignored (safer for production).');
         $f->checked = (bool) $this->oobStrictIdOnly;
+        $f->columnWidth = 50;
+        $inputfields->add($f);
+
+        $f = $modules->get('InputfieldCheckbox');
+        $f->attr('name', 'oobStrictSwapStyle');
+        $f->label = $this->_('OOB Swaps: Strict Swap Style Whitelist');
+        $f->description = $this->_('When enabled (default), hx-swap-oob values are validated against HTMX-spec whitelist (innerHTML/outerHTML/beforebegin/afterbegin/beforeend/afterend/delete/none/morphdom/morph + modifiers). Invalid styles silently fall back to outerHTML. Disable only if custom HTMX extensions require non-standard swap keywords.');
+        $f->checked = (bool) $this->oobStrictSwapStyle;
         $f->columnWidth = 50;
         $inputfields->add($f);
 

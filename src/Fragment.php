@@ -14,6 +14,26 @@ class Fragment extends WireData
 {
     private array $oobSwaps = [];
 
+    /**
+     * Whitelist of HTMX-valid hx-swap-oob / hx-swap values accepted by strict mode.
+     * These match the HTMX 1.x / 2.x specification exactly:
+     *  https://htmx.org/attributes/hx-swap/
+     *
+     * Append modifiers (e.g. innerHTML show:#foo) are validated separately after the base.
+     */
+    private const VALID_SWAP_BASE = [
+        'innerHTML',
+        'outerHTML',
+        'beforebegin',
+        'afterbegin',
+        'beforeend',
+        'afterend',
+        'delete',
+        'none',
+        'morphdom',
+        'morph' // HTMX 2.x + extensions morphdom/morph
+    ];
+
     private function isValidHtmlId(string $id): bool
     {
         return (bool) preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $id);
@@ -31,6 +51,39 @@ class Fragment extends WireData
     }
 
     /**
+     * Validate a swap style against the HTMX spec whitelist (with optional modifiers).
+     *
+     * Allowed shape: <base-swap> [modifier1 modifier2 ...]
+     *   e.g. innerHTML show:#target swap:1s settle:500ms
+     */
+    private function isValidSwapStyle(string $swapStyle): bool
+    {
+        $swapStyle = trim($swapStyle);
+        if ($swapStyle === '') {
+            return false;
+        }
+
+        // Strip optional leading selector used in hx-swap-oob syntax:
+        //   hx-swap-oob="true" (legacy), "outerHTML", or "afterend:#some-id"
+        if (strpos($swapStyle, ':') !== false) {
+            $parts = explode(':', $swapStyle, 2);
+            $base = $parts[0] === '' ? 'outerHTML' : $parts[0];
+            // Everything after the colon is selector / modifiers — skip deep check, just
+            // ensure no raw CR/LF that would break attribute escaping
+            $rest = $parts[1] ?? '';
+            if (strcspn($rest, "\r\n\0") !== strlen($rest)) {
+                return false;
+            }
+        } else {
+            $tokens = preg_split('/\s+/', $swapStyle);
+            $base = $tokens[0] ?? '';
+        }
+
+        $base = strtolower(trim((string) $base));
+        return in_array($base, self::VALID_SWAP_BASE, true) || $base === 'true';
+    }
+
+    /**
      * Store HTML to be swapped out-of-band at the end of the request.
      */
     public function addOobSwap(string $selector, string $html, string $swapStyle = 'outerHTML'): self
@@ -40,19 +93,47 @@ class Fragment extends WireData
         $startsWithHash = strpos($selector, '#') === 0;
         $rawId = $startsWithHash ? substr($selector, 1) : $selector;
 
-        $strict = false;
+        $strictId = false;
+        $strictSwap = false;
         $htmx = $this->wire('htmx');
-        if ($htmx && isset($htmx->oobStrictIdOnly)) {
-            $strict = (bool) $htmx->oobStrictIdOnly;
+        if ($htmx) {
+            if (isset($htmx->oobStrictIdOnly)) {
+                $strictId = (bool) $htmx->oobStrictIdOnly;
+            }
+            if (isset($htmx->oobStrictSwapStyle)) {
+                $strictSwap = (bool) $htmx->oobStrictSwapStyle;
+            }
         }
 
-        if ($strict) {
+        // 1. Swap-style validation (strict mode on by default, can be opted out)
+        if ($strictSwap || !$htmx) {
+            if (!$this->isValidSwapStyle($swapStyle)) {
+                $config = $this->wire('config');
+                if ($config && $config->debug) {
+                    $log = $this->wire('log');
+                    if ($log) {
+                        $log->warning(
+                            'HTMX OOB strict-swap rejected invalid swapStyle: ' . $swapStyle
+                        );
+                    }
+                }
+                // Safe default fallback — never use user-supplied style
+                $swapStyle = 'outerHTML';
+            }
+        }
+
+        // 2. ID / selector strictness validation
+        if ($strictId) {
             $isStrictIdSelector = $startsWithHash
                 ? (bool) preg_match('/^#[A-Za-z][A-Za-z0-9\-_:.]*$/', $selector)
                 : $this->isValidHtmlId($rawId);
             if (!$isStrictIdSelector) {
-                if ($this->wire('config')->debug) {
-                    $this->wire('log')->warning('HTMX OOB strict mode rejected selector: ' . $selector);
+                $config = $this->wire('config');
+                if ($config && $config->debug) {
+                    $log = $this->wire('log');
+                    if ($log) {
+                        $log->warning('HTMX OOB strict mode rejected selector: ' . $selector);
+                    }
                 }
                 return $this;
             }
