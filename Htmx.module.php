@@ -71,8 +71,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
     {
         return [
             'title' => 'HTMX',
-            'version' => 120,
-            'summary' => 'Provides HTMX v2 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
+            'version' => 121,
+            'summary' => 'Provides HTMX v4 integration including Component State, Out-of-band swaps, Extensions, and SSE support natively within ProcessWire.',
             'href' => 'https://github.com/trk/Htmx',
             'author' => 'Iskender TOTOGLU @trk @ukyo',
             'requires' => [
@@ -165,15 +165,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
                 $this->wire('config')->scripts->add($url);
             }
 
-            // Inject CSRF protection bridge
-            $baseUrl = $this->wire('config')->urls->siteModules . $this->className() . "/resources/assets/js/";
-            $this->wire('config')->scripts->add($baseUrl . "pw-csrf.js");
-            // Guard: prevent full HTML documents swapping into targets
-            $this->wire('config')->scripts->add($baseUrl . "pw-htmx-guard.js");
-
-            // Optional debug helper (no behavior change unless window.__pwHtmxDebug === true)
-            if ($this->wire('config')->debug) {
-                $this->wire('config')->scripts->add($baseUrl . "pw-htmx-debug.js");
+            foreach ($this->getAdminHelperAssetUrls() as $url) {
+                $this->wire('config')->scripts->add($url);
             }
         }
 
@@ -251,18 +244,28 @@ window.pwHtmx.on = window.pwHtmx.on || function(name, fn) {
   window.pwHtmx.hooks[name].push(fn);
 };
 function pwHtmxEmit(name, detail) {
+  var alias = typeof name === 'string' ? name.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase() : name;
   try {
     window.dispatchEvent(new CustomEvent('{$prefix}:' + name, { detail: detail }));
+    if (alias && alias !== name) {
+      window.dispatchEvent(new CustomEvent('{$prefix}:' + alias, { detail: detail }));
+    }
   } catch (e) {}
   var list = (window.pwHtmx && window.pwHtmx.hooks && window.pwHtmx.hooks[name]) ? window.pwHtmx.hooks[name] : [];
   for (var i = 0; i < list.length; i++) {
     try { list[i](detail); } catch (e) {}
   }
+  if (alias && alias !== name) {
+    var aliasList = (window.pwHtmx && window.pwHtmx.hooks && window.pwHtmx.hooks[alias]) ? window.pwHtmx.hooks[alias] : [];
+    for (var j = 0; j < aliasList.length; j++) {
+      try { aliasList[j](detail); } catch (e) {}
+    }
+  }
 }
-document.addEventListener('htmx:afterSwap', function(evt){ pwHtmxEmit('afterSwap', evt.detail); });
-document.addEventListener('htmx:afterSettle', function(evt){ pwHtmxEmit('afterSettle', evt.detail); });
-document.addEventListener('htmx:beforeRequest', function(evt){ pwHtmxEmit('beforeRequest', evt.detail); });
-document.addEventListener('htmx:responseError', function(evt){ pwHtmxEmit('responseError', evt.detail); });
+document.addEventListener('htmx:after:swap', function(evt){ pwHtmxEmit('afterSwap', evt.detail); });
+document.addEventListener('htmx:after:settle', function(evt){ pwHtmxEmit('afterSettle', evt.detail); });
+document.addEventListener('htmx:before:request', function(evt){ pwHtmxEmit('beforeRequest', evt.detail); });
+document.addEventListener('htmx:response:error', function(evt){ pwHtmxEmit('responseError', evt.detail); });
 </script>
 HTML;
                 $html = str_replace('</head>', "{$bridge}\n</head>", $html);
@@ -281,11 +284,16 @@ HTML;
                     $scripts .= <<<HTML
 
 <script>
-document.addEventListener('htmx:configRequest', function(evt) {
-    if (evt.detail.verb !== "get") {
-        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
-        evt.detail.headers['X-Requested-With'] = 'XMLHttpRequest';
+document.addEventListener('htmx:config:request', function(evt) {
+    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
+    var request = ctx && ctx.request ? ctx.request : null;
+    if (!request || !request.method || request.method.toLowerCase() === "get") {
+        return;
     }
+    if (request.body instanceof FormData) {
+        request.body.set('{$csrfName}', '{$csrfValue}');
+    }
+    request.headers['X-Requested-With'] = 'XMLHttpRequest';
 });
 </script>
 HTML;
@@ -296,7 +304,7 @@ HTML;
                 }
             }
 
-            // 4. Auto Flash Messages to HX-Trigger-After-Swap
+            // 4. Auto Flash Messages to deferred client lifecycle events
             if ($this->autoFlashMessages && $this->request->isHtmx()) {
                 $flash = [];
                 try {
@@ -349,11 +357,12 @@ HTML;
             'endpointUrl' => (string) $this->endpointUrl,
             'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
             'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
-            'target' => $this->request ? $this->request->target() : null,
-            'trigger' => $this->request ? $this->request->header('HX-Trigger') : ($_SERVER['HTTP_HX_TRIGGER'] ?? null),
+            'target' => $this->request ? $this->request->rawTarget() : null,
+            'trigger' => $this->request ? $this->request->rawSource() : null,
             'triggerName' => $this->request ? $this->request->header('HX-Trigger-Name') : ($_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null),
             'prompt' => $this->request ? $this->request->prompt() : ($_SERVER['HTTP_HX_PROMPT'] ?? null),
             'currentUrl' => $this->request ? $this->request->header('HX-Current-URL') : ($_SERVER['HTTP_HX_CURRENT_URL'] ?? null),
+            'requestType' => $this->request ? $this->request->header('HX-Request-Type') : ($_SERVER['HTTP_HX_REQUEST_TYPE'] ?? null),
             // Redacted: only keys, never values.
             'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
             'component' => null,
@@ -664,11 +673,12 @@ HTML;
             'endpointUrl' => (string) $this->endpointUrl,
             'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
             'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
-            'target' => $this->request ? $this->request->target() : null,
-            'trigger' => $_SERVER['HTTP_HX_TRIGGER'] ?? null,
+            'target' => $this->request ? $this->request->rawTarget() : null,
+            'trigger' => $this->request ? $this->request->rawSource() : null,
             'triggerName' => $_SERVER['HTTP_HX_TRIGGER_NAME'] ?? null,
             'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
             'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
+            'requestType' => $_SERVER['HTTP_HX_REQUEST_TYPE'] ?? null,
             // Redacted: never include raw values from POST.
             'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
             'component' => $this->tracyDebug['component'] ?? null,
@@ -789,14 +799,14 @@ HTML;
     {
         $extensions = (array) $extension;
         foreach ($extensions as $ext) {
-            if (!in_array($ext, $this->extensions)) {
-                $this->extensions[] = $ext;
+            $normalized = $this->normalizeExtensionName((string) $ext);
+            if (!in_array($normalized, $this->extensions, true)) {
+                $this->extensions[] = $normalized;
 
                 // If in Admin, append dynamically to the scripts array immediately
                 if ($this->inAdmin()) {
                     $config = $this->wire('config');
-                    $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
-                    $config->scripts->add($baseUrl . "ext/{$ext}.js");
+                    $config->scripts->add($this->getHtmxBaseUrl() . "ext/{$normalized}" . ($config->debug ? '.js' : '.min.js'));
                 }
             }
         }
@@ -813,8 +823,7 @@ HTML;
             if ($this->inAdmin()) {
                 $config = $this->wire('config');
                 $minified = $config->debug ? '.js' : '.min.js';
-                $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
-                $config->scripts->add($baseUrl . "hyperscript" . $minified);
+                $config->scripts->add($this->getHyperscriptBaseUrl() . "_hyperscript" . $minified);
             }
         } else {
             $this->loadHyperscript = $load;
@@ -863,11 +872,16 @@ HTML;
         $csrfValue = $this->wire('session')->CSRF->getTokenValue();
         $scripts .= <<<HTML
 <script>
-document.addEventListener('htmx:configRequest', function(evt) {
-    if (evt.detail.verb !== "get") {
-        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
-        evt.detail.headers['X-Requested-With'] = 'XMLHttpRequest';
+document.addEventListener('htmx:config:request', function(evt) {
+    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
+    var request = ctx && ctx.request ? ctx.request : null;
+    if (!request || !request.method || request.method.toLowerCase() === "get") {
+        return;
     }
+    if (request.body instanceof FormData) {
+        request.body.set('{$csrfName}', '{$csrfValue}');
+    }
+    request.headers['X-Requested-With'] = 'XMLHttpRequest';
 });
 </script>
 HTML;
@@ -885,26 +899,81 @@ HTML;
     {
         /** @var Config $config */
         $config = $this->wire('config');
-        $minified = $config->debug ? '.js' : '.min.js'; // Fallback to minified in prod
+        $minified = $config->debug ? '.js' : '.min.js';
 
-        $urls = [];
+        $urls = [$this->getHtmxBaseUrl() . "htmx" . $minified];
 
-        // Base HTMX library (local)
-        // We handle debug vs prod version mapping by checking what's on disk.
-        $baseUrl = $config->urls->siteModules . $this->className() . "/resources/assets/js/";
-        $urls[] = $baseUrl . "htmx" . $minified;
+        // Runtime helper keeps deferred triggers working on HTMX v4.
+        $urls[] = $this->getHtmxBaseUrl() . "pw-htmx-runtime.js";
 
         if ($this->inAdmin() || $this->loadHyperscript) {
-            $urls[] = $baseUrl . "hyperscript" . $minified;
+            $urls[] = $this->getHyperscriptBaseUrl() . "_hyperscript" . $minified;
         }
 
         // Load extensions if requested (ws, sse, etc.)
-        foreach ($this->extensions as $ext) {
-            // Ext files might only exist as .js
-            $urls[] = $baseUrl . "ext/{$ext}.js";
+        foreach ($this->getNormalizedExtensions() as $ext) {
+            $urls[] = $this->getHtmxBaseUrl() . "ext/{$ext}" . $minified;
         }
 
         return $urls;
+    }
+
+    /**
+     * Helper scripts used only in the ProcessWire admin.
+     *
+     * These remain separate from the vendor bundles so the upstream HTMX and
+     * _hyperscript distributions can stay untouched inside their own folders.
+     *
+     * @return array<int, string>
+     */
+    protected function getAdminHelperAssetUrls(): array
+    {
+        $urls = [
+            $this->getHtmxBaseUrl() . 'pw-csrf.js',
+            $this->getHtmxBaseUrl() . 'pw-htmx-guard.js',
+        ];
+
+        if ($this->wire('config')->debug) {
+            $urls[] = $this->getHtmxBaseUrl() . 'pw-htmx-debug.js';
+        }
+
+        return $urls;
+    }
+
+    protected function getHtmxBaseUrl(): string
+    {
+        return $this->wire('config')->urls->siteModules . $this->className() . "/resources/htmx/";
+    }
+
+    protected function getHyperscriptBaseUrl(): string
+    {
+        return $this->wire('config')->urls->siteModules . $this->className() . "/resources/_hyperscript/";
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function getNormalizedExtensions(): array
+    {
+        return array_values(array_unique(array_map(
+            fn(string $ext): string => $this->normalizeExtensionName($ext),
+            array_map('strval', (array) $this->extensions)
+        )));
+    }
+
+    protected function normalizeExtensionName(string $extension): string
+    {
+        $extension = trim($extension);
+
+        return match ($extension) {
+            'ws' => 'hx-ws',
+            'sse' => 'hx-sse',
+            'head-support' => 'hx-head',
+            'preload' => 'hx-preload',
+            'response-targets' => 'hx-targets',
+            'prompt' => 'hx-prompt',
+            default => $extension,
+        };
     }
 
     /**
@@ -965,7 +1034,7 @@ HTML;
         $f = $modules->get('InputfieldCheckbox');
         $f->attr('name', 'autoFlashMessages');
         $f->label = $this->_('Auto Flash Messages to HTMX');
-        $f->description = $this->_('When enabled, `$session->message()` and `$session->error()` will be automatically transformed into an HX-Trigger-After-Swap event (`pw-messages`) on HTMX requests.');
+        $f->description = $this->_('When enabled, `$session->message()` and `$session->error()` will be transformed into deferred HTMX client events (`pw-messages`) on HTMX requests.');
         $f->checked = (bool)$this->autoFlashMessages;
         $f->columnWidth = 50;
         $inputfields->add($f);
@@ -1013,7 +1082,7 @@ HTML;
         $f = $modules->get('InputfieldText');
         $f->attr('name', 'lifecycleEventPrefix');
         $f->label = $this->_('Lifecycle Event Prefix');
-        $f->description = $this->_('Prefix used for dispatched events (example: "pw-htmx:afterSwap").');
+        $f->description = $this->_('Prefix used for dispatched events (example: "pw-htmx:after-swap").');
         $f->value = (string) $this->lifecycleEventPrefix;
         $f->columnWidth = 50;
         $inputfields->add($f);
@@ -1022,12 +1091,13 @@ HTML;
         $f->attr('name', 'extensions');
         $f->label = $this->_('Enable HTMX Extensions');
         $f->description = $this->_('Check which supported HTMX extensions you want injected locally.');
-        $f->addOption('ws', $this->_('WebSockets (ws.js) - Bi-directional communication.'));
-        $f->addOption('sse', $this->_('Server-Sent Events (sse.js) - Uni-directional server streams.'));
-        $f->addOption('head-support', $this->_('Head Support (head-support.js) - Merge head tags during swaps.'));
-        $f->addOption('preload', $this->_('Preload (preload.js) - Background preloading of links.'));
-        $f->addOption('response-targets', $this->_('Response Targets (response-targets.js) - Different targets based on HTTP status.'));
-        $f->attr('value', $this->extensions);
+        $f->addOption('hx-ws', $this->_('WebSockets (hx-ws.js) - Bi-directional communication.'));
+        $f->addOption('hx-sse', $this->_('Server-Sent Events (hx-sse.js) - Uni-directional server streams.'));
+        $f->addOption('hx-head', $this->_('Head Merge (hx-head.js) - Merge head tags during swaps.'));
+        $f->addOption('hx-preload', $this->_('Preload (hx-preload.js) - Background preloading of links.'));
+        $f->addOption('hx-targets', $this->_('Targets (hx-targets.js) - Swap the same response into multiple targets.'));
+        $f->addOption('hx-prompt', $this->_('Prompt (hx-prompt.js) - Restore hx-prompt support on HTMX v4.'));
+        $f->attr('value', $this->getNormalizedExtensions());
         $inputfields->add($f);
 
         return $inputfields;

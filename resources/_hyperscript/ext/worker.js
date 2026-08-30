@@ -1,0 +1,207 @@
+"use strict";
+(() => {
+  // src/parsetree/base.js
+  var ParseElement = class _ParseElement {
+    errors = [];
+    collectErrors(visited) {
+      if (!visited) visited = /* @__PURE__ */ new Set();
+      if (visited.has(this)) return [];
+      visited.add(this);
+      var all = [...this.errors];
+      for (var key of Object.keys(this)) {
+        for (var item of [this[key]].flat()) {
+          if (item instanceof _ParseElement) {
+            all.push(...item.collectErrors(visited));
+          }
+        }
+      }
+      return all;
+    }
+    sourceFor() {
+      return this.programSource.substring(this.startToken.start, this.endToken.end);
+    }
+    lineFor() {
+      return this.programSource.split("\n")[this.startToken.line - 1];
+    }
+    static parseEventArgs(parser) {
+      var args = [];
+      if (parser.token(0).value === "(" && (parser.token(1).value === ")" || parser.token(2).value === "," || parser.token(2).value === ")")) {
+        parser.matchOpToken("(");
+        do {
+          args.push(parser.requireTokenType("IDENTIFIER"));
+        } while (parser.matchOpToken(","));
+        parser.requireOpToken(")");
+      }
+      return args;
+    }
+  };
+  var Feature = class extends ParseElement {
+    isFeature = true;
+    constructor() {
+      super();
+      if (this.constructor.keyword) {
+        this.type = this.constructor.keyword + "Feature";
+      }
+    }
+    install(target, source, args, runtime) {
+    }
+    /**
+     * Parse optional catch/finally blocks after a command list.
+     * Returns { errorHandler, errorSymbol, finallyHandler }
+     */
+    static parseErrorAndFinally(parser) {
+      var errorSymbol, errorHandler, finallyHandler;
+      if (parser.matchToken("catch")) {
+        errorSymbol = parser.requireTokenType("IDENTIFIER").value;
+        errorHandler = parser.requireElement("commandList");
+        parser.ensureTerminated(errorHandler);
+      }
+      if (parser.matchToken("finally")) {
+        finallyHandler = parser.requireElement("commandList");
+        parser.ensureTerminated(finallyHandler);
+      }
+      return { errorHandler, errorSymbol, finallyHandler };
+    }
+  };
+
+  // src/ext/worker.js
+  var invocationIdCounter = 0;
+  var workerFunc = function(self2) {
+    self2.onmessage = function(e) {
+      switch (e.data.type) {
+        case "init":
+          self2.importScripts(e.data._hyperscript);
+          self2.importScripts.apply(self2, e.data.extraScripts);
+          const _hyperscript = self2["_hyperscript"];
+          var hyperscript = _hyperscript.parse(e.data.src);
+          hyperscript.apply(self2, self2);
+          postMessage({ type: "didInit" });
+          break;
+        case "call":
+          try {
+            var result = self2["_hyperscript"].internals.runtime.getHyperscriptFeatures(self2)[e.data.function].apply(self2, e.data.args);
+            Promise.resolve(result).then(function(value) {
+              postMessage({
+                type: "resolve",
+                id: e.data.id,
+                value
+              });
+            }).catch(function(error) {
+              postMessage({
+                type: "reject",
+                id: e.data.id,
+                error: error.toString()
+              });
+            });
+          } catch (error) {
+            postMessage({
+              type: "reject",
+              id: e.data.id,
+              error: error.toString()
+            });
+          }
+          break;
+      }
+    };
+  };
+  var workerCode = "(" + workerFunc.toString() + ")(self)";
+  var blob = new Blob([workerCode], { type: "text/javascript" });
+  var workerUri = URL.createObjectURL(blob);
+  var WorkerFeature = class _WorkerFeature extends Feature {
+    static keyword = "worker";
+    constructor(workerName, nameSpace, worker, stubs) {
+      super();
+      this.workerName = workerName;
+      this.name = workerName;
+      this.nameSpace = nameSpace;
+      this.worker = worker;
+      this.stubs = stubs;
+    }
+    static parse(parser) {
+      if (parser.matchToken("worker")) {
+        var name = parser.requireElement("dotOrColonPath");
+        var qualifiedName = name.evalStatically();
+        var nameSpace = qualifiedName.split(".");
+        var workerName = nameSpace.pop();
+        var extraScripts = [];
+        if (parser.matchOpToken("(")) {
+          if (parser.matchOpToken(")")) {
+          } else {
+            do {
+              var extraScript = parser.requireTokenType("STRING").value;
+              var absoluteUrl = new URL(extraScript, location.href).href;
+              extraScripts.push(absoluteUrl);
+            } while (parser.matchOpToken(","));
+            parser.requireOpToken(")");
+          }
+        }
+        var funcNames = [];
+        var bodyStartIndex = parser.consumed.length;
+        var bodyEndIndex = parser.consumed.length;
+        do {
+          var feature = parser.parseAnyOf(["defFeature", "jsFeature"]);
+          if (feature) {
+            if (feature.type === "defFeature") {
+              funcNames.push(feature.name);
+              bodyEndIndex = parser.consumed.length;
+            } else {
+              if (parser.hasMore()) continue;
+            }
+          } else break;
+        } while (parser.matchToken("end") && parser.hasMore());
+        var bodyTokens = parser.consumed.slice(bodyStartIndex, bodyEndIndex + 1);
+        var bodySrc = parser.source.substring(bodyTokens[0].start, bodyTokens[bodyTokens.length - 1].end);
+        var worker = new Worker(workerUri);
+        worker.postMessage({
+          type: "init",
+          _hyperscript: document.currentScript?.src || "/dist/_hyperscript.js",
+          extraScripts,
+          src: bodySrc
+        });
+        var workerPromise = new Promise(function(resolve, reject) {
+          worker.addEventListener(
+            "message",
+            function(e) {
+              if (e.data.type === "didInit") resolve();
+            },
+            { once: true }
+          );
+        });
+        var stubs = {};
+        funcNames.forEach(function(funcName) {
+          stubs[funcName] = function() {
+            var args = arguments;
+            return new Promise(function(resolve, reject) {
+              var id = invocationIdCounter++;
+              worker.addEventListener("message", function returnListener(e) {
+                if (e.data.id !== id) return;
+                worker.removeEventListener("message", returnListener);
+                if (e.data.type === "resolve") resolve(e.data.value);
+                else reject(e.data.error);
+              });
+              workerPromise.then(function() {
+                worker.postMessage({
+                  type: "call",
+                  function: funcName,
+                  args: Array.from(args),
+                  id
+                });
+              });
+            });
+          };
+        });
+        return new _WorkerFeature(workerName, nameSpace, worker, stubs);
+      }
+    }
+    install(target, source, args, runtime) {
+      runtime.assignToNamespace(target, this.nameSpace, this.workerName, this.stubs);
+    }
+  };
+  function workerPlugin(_hyperscript) {
+    _hyperscript.addFeature(WorkerFeature.keyword, WorkerFeature.parse.bind(WorkerFeature));
+  }
+  if (typeof self !== "undefined" && self._hyperscript) {
+    self._hyperscript.use(workerPlugin);
+  }
+})();
+//# sourceMappingURL=worker.js.map

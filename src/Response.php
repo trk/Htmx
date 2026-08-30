@@ -12,6 +12,9 @@ use ProcessWire\WireData;
  */
 class Response extends WireData
 {
+    private const DEFERRED_SWAP_EVENT = '__pwHtmxAfterSwap';
+    private const DEFERRED_SETTLE_EVENT = '__pwHtmxAfterSettle';
+
     private array $triggers = [];
     private array $triggersAfterSettle = [];
     private array $triggersAfterSwap = [];
@@ -107,7 +110,7 @@ class Response extends WireData
     public function triggerAfterSettle(string $name, mixed $data = null): self
     {
         $this->triggersAfterSettle[$name] = $data;
-        $this->applyTriggers('HX-Trigger-After-Settle', $this->triggersAfterSettle);
+        $this->applyDeferredTriggers(self::DEFERRED_SETTLE_EVENT, $this->triggersAfterSettle);
         return $this;
     }
 
@@ -117,7 +120,7 @@ class Response extends WireData
     public function triggerAfterSwap(string $name, mixed $data = null): self
     {
         $this->triggersAfterSwap[$name] = $data;
-        $this->applyTriggers('HX-Trigger-After-Swap', $this->triggersAfterSwap);
+        $this->applyDeferredTriggers(self::DEFERRED_SWAP_EVENT, $this->triggersAfterSwap);
         return $this;
     }
 
@@ -141,6 +144,17 @@ class Response extends WireData
     }
 
     /**
+     * HTMX v4 removed the dedicated deferred-trigger headers.
+     * We tunnel deferred events through HX-Trigger and let the client runtime
+     * re-dispatch them at the requested lifecycle phase.
+     */
+    private function applyDeferredTriggers(string $eventName, array $triggers): void
+    {
+        $this->triggers[$eventName] = ['events' => $triggers];
+        $this->applyTriggers('HX-Trigger', $this->triggers);
+    }
+
+    /**
      * Return HTTP 286 to stop HTMX polling.
      */
     public function stopPolling(): void
@@ -149,7 +163,7 @@ class Response extends WireData
     }
 
     /**
-     * Send a 422 validation error response to trigger response-targets extensions.
+     * Send a 422 validation error response that can be handled with hx-status.
      */
     public function validationError(?string $target = null): self
     {

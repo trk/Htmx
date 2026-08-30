@@ -16,8 +16,7 @@ class Fragment extends WireData
 
     /**
      * Whitelist of HTMX-valid hx-swap-oob / hx-swap values accepted by strict mode.
-     * These match the HTMX 1.x / 2.x specification exactly:
-     *  https://htmx.org/attributes/hx-swap/
+     * These match the current HTMX v4 swap vocabulary used by the module.
      *
      * Append modifiers (e.g. innerHTML show:#foo) are validated separately after the base.
      */
@@ -31,7 +30,7 @@ class Fragment extends WireData
         'delete',
         'none',
         'morphdom',
-        'morph' // HTMX 2.x + extensions morphdom/morph
+        'morph' // Morph-style extensions / plugins
     ];
 
     private function isValidHtmlId(string $id): bool

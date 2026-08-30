@@ -13,6 +13,11 @@ use ProcessWire\WireData;
 class Request extends WireData
 {
     /**
+     * Strict HTML id validation used when normalizing HTMX v4 header descriptors.
+     */
+    private const HTML_ID_PATTERN = '/^[A-Za-z][A-Za-z0-9\-_:.]*$/';
+
+    /**
      * Determine if the request is an HTMX request.
      */
     public function isHtmx(): bool
@@ -49,6 +54,16 @@ class Request extends WireData
      */
     public function target(): ?string
     {
+        return $this->extractElementId($this->rawTarget());
+    }
+
+    /**
+     * Get the raw HTMX target descriptor as sent by the browser.
+     *
+     * In HTMX v4 this is typically "tag#id" or just "tag".
+     */
+    public function rawTarget(): ?string
+    {
         return $this->getHeader('HTTP_HX_TARGET');
     }
 
@@ -57,7 +72,17 @@ class Request extends WireData
      */
     public function trigger(): ?string
     {
-        return $this->getHeader('HTTP_HX_TRIGGER');
+        return $this->extractElementId($this->rawSource());
+    }
+
+    /**
+     * Get the raw HTMX source descriptor as sent by the browser.
+     *
+     * In HTMX v4 this is typically "tag#id" or just "tag".
+     */
+    public function rawSource(): ?string
+    {
+        return $this->getHeader('HX-Source') ?? $this->getHeader('HTTP_HX_TRIGGER');
     }
 
     /**
@@ -190,5 +215,37 @@ class Request extends WireData
         }
 
         return null;
+    }
+
+    /**
+     * Normalize HTMX v4 element descriptors down to an HTML id when possible.
+     *
+     * Accepts legacy ids ("result-panel"), CSS-style ids ("#result-panel"),
+     * and HTMX v4 descriptors ("div#result-panel"). Returns null when the
+     * descriptor does not carry an id (for example plain "div").
+     */
+    private function extractElementId(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        $hashPos = strrpos($value, '#');
+        if ($hashPos !== false) {
+            $candidate = substr($value, $hashPos + 1);
+            return preg_match(self::HTML_ID_PATTERN, $candidate) === 1 ? $candidate : null;
+        }
+
+        if ($value[0] === '#') {
+            $candidate = substr($value, 1);
+            return preg_match(self::HTML_ID_PATTERN, $candidate) === 1 ? $candidate : null;
+        }
+
+        return preg_match(self::HTML_ID_PATTERN, $value) === 1 ? $value : null;
     }
 }
