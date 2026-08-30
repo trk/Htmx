@@ -1,4 +1,8 @@
 (function () {
+  function getDefaultTarget() {
+    return document.body || document.documentElement || document;
+  }
+
   function getDeferredEvents(evt) {
     var detail = (evt && evt.detail) || {};
 
@@ -15,13 +19,13 @@
 
   function resolveTarget(detail) {
     if (!detail || typeof detail !== 'object' || !detail.target || typeof detail.target !== 'string') {
-      return document.body;
+      return getDefaultTarget();
     }
 
     try {
-      return document.querySelector(detail.target) || document.body;
+      return document.querySelector(detail.target) || getDefaultTarget();
     } catch (e) {
-      return document.body;
+      return getDefaultTarget();
     }
   }
 
@@ -53,13 +57,13 @@
     window.setTimeout(run, fallbackDelay);
   }
 
-  document.body.addEventListener('__pwHtmxAfterSwap', function (evt) {
+  document.addEventListener('__pwHtmxAfterSwap', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
     dispatchAfter('htmx:after:swap', eventMap, 0);
   });
 
-  document.body.addEventListener('__pwHtmxAfterSettle', function (evt) {
+  document.addEventListener('__pwHtmxAfterSettle', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
     dispatchAfter('htmx:after:settle', eventMap, 20);
