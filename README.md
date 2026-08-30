@@ -1,7 +1,7 @@
 # ProcessWire HTMX Module
 
 ![ProcessWire](https://img.shields.io/badge/ProcessWire-3.x-orange.svg)
-![HTMX](https://img.shields.io/badge/HTMX-2.x-blue.svg)
+![HTMX](https://img.shields.io/badge/HTMX-4.x-blue.svg)
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success.svg)
 ![Security](https://img.shields.io/badge/Security-HMAC--SHA256-critical.svg)
 
@@ -13,7 +13,7 @@ By unifying **State-Aware Components**, **HMAC-SHA256 Payload Security**, and Pr
 
 ## 🏗 Executive Overview
 
-- **Natively Bundled:** Supplies HTMX 2.x, WebSockets (`ws.js`), Server-Sent Events (`sse.js`), along with key extensions and `_hyperscript`, completely zero-dependency.
+- **Natively Bundled:** Supplies HTMX 4.x, official extensions like `hx-ws` and `hx-sse`, along with `_hyperscript`, completely zero-dependency.
 - **State-Aware Component Architecture:** Seamless data hydration and dehydration between requests.
 - **Object Synthesis:** Magically serialize full ProcessWire objects (like `Page`) down to lightweight secure IDs, restoring them effortlessly on the next request.
 - **Cryptographic Security:** End-to-end state manipulation protection with built-in HMAC-SHA256 signatures and TTL-based Replay Protection.
@@ -101,7 +101,7 @@ For ProcessWire installs living in a subdirectory (where `config()->urls->root` 
 
 ## 🛡 Admin Safety: Full-Document Swap Guard
 
-In the ProcessWire admin, the module loads `resources/assets/js/pw-htmx-guard.js` to prevent accidental swaps where an HTMX request returns a full HTML document (common causes: wrong endpoint, login redirect, CSRF issues).
+In the ProcessWire admin, the module loads `resources/htmx/pw-htmx-guard.js` to prevent accidental swaps where an HTMX request returns a full HTML document (common causes: wrong endpoint, login redirect, CSRF issues).
 
 - If a full document is detected, the swap is cancelled.
 - You can override the alert message by defining `window.__pwHtmxGuardMessage` before the swap occurs.
@@ -330,8 +330,8 @@ $htmx = wire('htmx');
 
 // Advanced Inspection
 if ($htmx->request->isHtmx()) {
-    $target  = $htmx->request->target();    // e.g. '#modal-content'
-    $trigger = $htmx->request->triggerName(); // e.g. 'delete-btn'
+    $target  = $htmx->request->target();     // e.g. 'modal-content'
+    $source  = $htmx->request->rawSource();  // e.g. 'button#delete-btn'
 
     // Automatically validate ProcessWire CSRF with HTTP 403 handling
     $htmx->request->validateCsrf(throwException: true);
@@ -347,7 +347,7 @@ Inject actions right back to the browser:
 $htmx->response->redirect('/dashboard/');
 $htmx->response->pushUrl('/dashboard/?success=1');
 
-// Form Validation (Throws HTTP 422 internally and swaps error UI)
+// Form Validation (Throws HTTP 422 internally; pair with hx-status on the client)
 $htmx->response->validationError('#form-errors-banner');
 
 // Trigger Custom Frontend Events (Great for Alpine.js / Hyperscript interoperability)
@@ -399,7 +399,7 @@ echo Modal::make(['title' => 'Warning!'])
 
 ## ⚙️ Advanced Configuration (Admin & On-Demand)
 
-Under **Modules > Configure > Htmx**, you can toggle the global loading state of WebSockets, Server-Sent Events, or `_hyperscript`.
+Under **Modules > Configure > Htmx**, you can toggle the global loading state of HTMX v4 extensions such as WebSockets, Server-Sent Events, or `_hyperscript`.
 
 However, if you prioritize performance, you can dynamically load extensions **only on the templates that need them** using the API:
 
@@ -407,13 +407,13 @@ However, if you prioritize performance, you can dynamically load extensions **on
 // _main.php
 $htmx = wire('htmx');
 
-// Inject WebSockets & Hyperscript purely for this request
-$htmx->use(extensions: ['ws', 'sse'], hyperscript: true);
+// Inject HTMX v4 extensions & Hyperscript purely for this request
+$htmx->use(extensions: ['hx-ws', 'hx-sse'], hyperscript: true);
 ```
 
 ### Auto Flash Messages
 
-By enabling **Auto Flash Messages** in the configuration, standard ProcessWire output (`$session->message()`) acts dynamically with HTMX responses. These are shipped as a `hx-trigger-after-swap: {"pw-messages": ...}` JSON event. You can then listen and hook Toast notifications gracefully on the client.
+By enabling **Auto Flash Messages** in the configuration, standard ProcessWire output (`$session->message()`) acts dynamically with HTMX responses. These are shipped as deferred HTMX client events for `pw-messages`, so you can listen and hook Toast notifications gracefully on the client after the swap lifecycle completes.
 
 ### Auto Target Extraction
 

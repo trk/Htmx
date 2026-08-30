@@ -109,7 +109,8 @@ Key details:
 
 - `isHtmx()`: bool (Is this an HX-Request?)
 - `isBoosted()`: bool
-- `target()`: string|null (ID of target element)
+- `target()`: string|null (Normalized ID of target element)
+- `rawSource()`: string|null (Raw v4 source descriptor such as `button#save`)
 - `prompt()`: string|null (Response to hx-prompt)
 
 ### Response API (`$this->htmx->response`)
@@ -118,7 +119,7 @@ Key details:
 - `refresh()`: Full page refresh.
 - `trigger('eventName', ['data' => 1])`: Fire HX-Trigger events locally.
 - `retarget('#new-target')`: Change swap target dynamically.
-- `validationError('#target')`: Returns HTTP 422 to trigger extension errors.
+- `validationError('#target')`: Returns HTTP 422 and optionally retargets the response; pair with `hx-status` on the client when you want status-specific swap behavior.
 
 ### Fragment API (Out-Of-Band Swaps) (`$this->htmx->fragment`)
 

@@ -11,7 +11,7 @@ metadata:
     - Totoglu
 ---
 
-# ProcessWire HTMX 2 Integration & State-Aware UI (wire-htmx-integration)
+# ProcessWire HTMX 4 Integration & State-Aware UI (wire-htmx-integration)
 
 This skill set operates strictly atop the customized **`Totoglu\Htmx`** modular architecture present in the host project. Abandon paradigms pertaining to React or Livewire; this architecture relies exclusively on **page-based HTMX state synchronization, cryptographically signed backend payload management, and fluent UI Element abstraction**.
 
@@ -179,7 +179,7 @@ Use the `--dir` option if placing elements outside the default `site/components`
 
 ## Essential Tools & Ecosystem
 - `site/modules/Htmx` (Heavily engaging the internal routing of `Totoglu\Htmx\Component` and `Totoglu\Htmx\Ui`).
-- UIkit 3 (The default UI framework utilized). As HTMX DOM integrations do NOT repeatedly fire `DOMContentLoaded`, asynchronous UIkit elements requiring Javascript initializations (uk-modal, uk-accordion) must be structured relative to HTMX `afterSettle` events.
+- UIkit 3 (The default UI framework utilized). As HTMX DOM integrations do NOT repeatedly fire `DOMContentLoaded`, asynchronous UIkit elements requiring Javascript initializations (uk-modal, uk-accordion) must be structured relative to HTMX `after:settle` events.
 
 ## Copy-Paste Prompts
 
