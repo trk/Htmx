@@ -1,12 +1,15 @@
 {
   "name": "trk/processwire-htmx",
-  "description": "State-aware HTMX 4 module offering a native Request/Response API and server-driven components for ProcessWire.",
+  "description": "State-aware HTMX v4 module offering a native Request/Response API and server-driven components for ProcessWire.",
   "type": "pw-module",
   "keywords": [
     "processwire",
     "htmx",
+    "htmx4",
     "state",
-    "component"
+    "component",
+    "morphdom",
+    "server-driven-ui"
   ],
   "homepage": "https://github.com/trk/Htmx",
   "license": "MIT",
@@ -23,7 +26,7 @@
     }
   },
   "require": {
-    "php": ">=8.1"
+    "php": ">=8.4"
   },
   "config": {
     "process-timeout": 0,
