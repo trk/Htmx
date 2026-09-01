@@ -57,6 +57,8 @@
     window.setTimeout(run, fallbackDelay);
   }
 
+  // HTMX v4 emits the synthetic event names we put in HX-Trigger immediately when headers arrive.
+  // We then replay the user's events at the correct lifecycle phase (after swap / settle).
   document.addEventListener('__pwHtmxAfterSwap', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
@@ -66,6 +68,6 @@
   document.addEventListener('__pwHtmxAfterSettle', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
-    dispatchAfter('htmx:after:settle', eventMap, 20);
+    dispatchAfter('htmx:after:settle', eventMap, 50);
   });
 })();

@@ -1,36 +1,49 @@
 // PW HTMX Guard
-// Purpose: prevent HTMX swaps from injecting a full HTML document into an admin target.
+// Prevents HTMX swaps from injecting a full HTML document into a partial target.
+//
+// HTMX v4 note: evt.detail.elt = target element, evt.detail.serverResponse = raw response text.
+// ctx.response (when present) is a fetch Response object, not an XHR.
 
 document.addEventListener('htmx:before:swap', function (evt) {
   try {
     var detail = evt.detail || {};
-    var ctx = detail.ctx || {};
-    var response = typeof ctx.response === 'string' ? ctx.response : '';
 
-    if (!response) return;
+    // HTMX v4 provides serverResponse as text on before:swap.
+    var responseText = '';
+    if (typeof detail.serverResponse === 'string') {
+      responseText = detail.serverResponse;
+    } else if (detail.fragment && typeof detail.fragment === 'string') {
+      responseText = detail.fragment;
+    } else if (detail.ctx && typeof detail.ctx.responseText === 'string') {
+      responseText = detail.ctx.responseText;
+    } else if (detail.xhr && detail.xhr.responseText) {
+      responseText = detail.xhr.responseText;
+    }
 
-    var txt = response.trim().toLowerCase();
+    if (!responseText) return;
+
+    var txt = responseText.trim().toLowerCase();
     var looksLikeFullDoc =
-      txt.startsWith('<!doctype html') ||
-      txt.startsWith('<html') ||
+      txt.indexOf('<!doctype html') !== -1 ||
+      txt.indexOf('<html') !== -1 ||
       (txt.indexOf('<head') !== -1 && txt.indexOf('<body') !== -1);
 
     if (!looksLikeFullDoc) return;
 
     evt.preventDefault();
 
-    console.error('HTMX swap prevented (full HTML document received). Check endpointUrl/CSRF.');
+    console.error('[PW HTMX Guard] Full HTML document detected — swap prevented. Check endpoint URL, CSRF token, or redirect behavior.');
 
     var msg =
       (typeof window !== 'undefined' && window.__pwHtmxGuardMessage) ||
-      'HTMX request did not return the expected fragment. Swap prevented. Check endpointUrl/CSRF/redirect.';
+      'HTMX request did not return the expected fragment. Swap prevented. Check endpoint URL, CSRF token, or redirect.';
 
     if (typeof ProcessWire !== 'undefined' && ProcessWire && typeof ProcessWire.alert === 'function') {
       ProcessWire.alert(msg);
     } else {
-      alert(msg);
+      window.alert(msg);
     }
   } catch (e) {
-    // ignore
+    // defensive no-op
   }
 });

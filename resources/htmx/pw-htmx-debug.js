@@ -1,17 +1,31 @@
 // PW HTMX Debug Helper
-// Purpose: optionally log key HTMX lifecycle events to the console in debug mode.
+// Logs HTMX v4 lifecycle events to the console when window.__pwHtmxDebug === true.
+//
+// v4 note: ctx.request = fetch Request (not XHR.open config)
+//          ctx.response = fetch Response (not XHR object) — use .status, .ok, .headers
 
 (function () {
   function enabled() {
     return typeof window !== 'undefined' && window.__pwHtmxDebug === true;
   }
 
-  function safeStatus(response) {
+  function safeStatus(ctx) {
     try {
-      return response && typeof response.status === 'number' ? response.status : null;
-    } catch (e) {
-      return null;
-    }
+      if (!ctx) return null;
+      if (ctx.statusCode) return ctx.statusCode;
+      if (ctx.response && typeof ctx.response.status === 'number') return ctx.response.status;
+      if (ctx.xhr && typeof ctx.xhr.status === 'number') return ctx.xhr.status;
+    } catch (e) {}
+    return null;
+  }
+
+  function safeUrl(ctx, request) {
+    try {
+      if (request && request.url) return request.url;
+      if (ctx && ctx.path) return ctx.path;
+      if (ctx && ctx.requestedPath) return ctx.requestedPath;
+    } catch (e) {}
+    return null;
   }
 
   function log(eventName, evt) {
@@ -22,29 +36,45 @@
       var ctx = detail.ctx || {};
       var request = ctx.request || {};
 
-      console.debug('[PW HTMX]', eventName, {
-        target: ctx.target || null,
-        requestConfig: {
+      var info = {
+        event: eventName,
+        target: (detail.elt && detail.elt.id) ? '#' + detail.elt.id : (detail.target || ctx.target || null),
+        request: {
           method: request.method || null,
-          action: request.action || null,
-          headers: request.headers || null
+          url: safeUrl(ctx, request),
+          headers: request.headers ? (request.headers.entries ? Object.fromEntries(request.headers.entries()) : request.headers) : null
         },
-        status: safeStatus(ctx.response)
-      });
+        responseStatus: safeStatus(ctx)
+      };
+
+      if (detail.error) {
+        info.error = String(detail.error);
+      }
+      if (detail.serverResponse && typeof detail.serverResponse === 'string' && detail.serverResponse.length < 500) {
+        info.responsePreview = detail.serverResponse;
+      }
+
+      console.debug('[PW HTMX]', eventName, info);
     } catch (e) {
       // ignore
     }
   }
 
-  document.addEventListener('htmx:before:request', function (evt) {
-    log('beforeRequest', evt);
-  });
+  // HTMX v4 colon-phase-action lifecycle events
+  var events = [
+    'htmx:before:request',
+    'htmx:after:request',
+    'htmx:before:swap',
+    'htmx:after:swap',
+    'htmx:after:settle',
+    'htmx:config:request',
+    'htmx:response:error',
+    'htmx:history:restore'
+  ];
 
-  document.addEventListener('htmx:after:request', function (evt) {
-    log('afterRequest', evt);
-  });
-
-  document.addEventListener('htmx:response:error', function (evt) {
-    log('responseError', evt);
+  events.forEach(function (name) {
+    document.addEventListener(name, function (evt) {
+      log(name.replace(/^htmx:/, '').replace(/:/g, ''), evt);
+    });
   });
 })();
