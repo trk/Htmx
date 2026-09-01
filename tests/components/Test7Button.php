@@ -16,14 +16,14 @@ class ButtonTestUiView extends Ui
         $clicks = $this->component ? $this->component->clicks : 0;
         $url = $this->component ? $this->component->requestUrl() : '';
 
-        $btnLike = (new Button(['label' => 'Like', 'variant' => 'success']))->action('like');
-        $btnReset = (new Button(['label' => 'Reset', 'variant' => 'danger']))->action('reset');
+        $btnLike = (new Button(['label' => 'Like', 'variant' => 'success']))->actionTrigger('like');
+        $btnReset = (new Button(['label' => 'Reset', 'variant' => 'danger']))->actionTrigger('reset');
 
         return "
         <div class='uk-card uk-card-default uk-card-body' id='test7'>
             <h3 class='uk-card-title'>Test 7: Custom Button Component</h3>
             <p>Likes: <strong>{$clicks}</strong></p>
-            <form hx-post='{$url}' hx-target='#test7' hx-swap='outerHTML' hx-select='#test7'>
+            <form hx-action='{$url}' hx-method='post' hx-target='#test7' hx-swap='outerMorph'>
                 {$payload}
                 {$btnLike}
                 {$btnReset}

@@ -16,15 +16,14 @@ class ClickCounterUiView extends Ui
         $count = $this->component ? $this->component->count : 0;
         $url = $this->component ? $this->component->requestUrl() : '';
 
-        // Our new button component in action
-        $btnIncrement = (new Button(['label' => '+1', 'variant' => 'primary']))->action('increment');
-        $btnDecrement = (new Button(['label' => '-1', 'variant' => 'danger']))->action('decrement');
+        $btnIncrement = (new Button(['label' => '+1', 'variant' => 'primary']))->actionTrigger('increment');
+        $btnDecrement = (new Button(['label' => '-1', 'variant' => 'danger']))->actionTrigger('decrement');
 
         return "
         <div class='uk-card uk-card-default uk-card-body' id='test2'>
             <h3 class='uk-card-title'>Test 2: UI Object Counter</h3>
             <p>Count is: <strong>{$count}</strong></p>
-            <form hx-post='{$url}' hx-target='#test2' hx-swap='outerHTML' hx-select='#test2'>
+            <form hx-action='{$url}' hx-method='post' hx-target='#test2' hx-swap='outerMorph'>
                 {$payload}
                 {$btnIncrement}
                 {$btnDecrement}

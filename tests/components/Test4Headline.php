@@ -17,7 +17,7 @@ class HeadlineUiView extends Ui
         $message = $this->component ? $this->component->message : '';
         $url = $this->component ? $this->component->requestUrl() : '';
 
-        $btnSave = (new Button(['label' => 'Save Headline', 'variant' => 'secondary']))->action('save');
+        $btnSave = (new Button(['label' => 'Save Headline', 'variant' => 'secondary']))->actionTrigger('save');
 
         $msgHtml = $message ? "<div class='uk-alert uk-alert-success'><p>{$this->esc($message)}</p></div>" : '';
 
@@ -25,7 +25,7 @@ class HeadlineUiView extends Ui
         <div class='uk-card uk-card-default uk-card-body' id='test4'>
             <h3 class='uk-card-title'>Test 4: UI Object (Update Headline)</h3>
             {$msgHtml}
-            <form hx-post='{$url}' hx-target='#test4' hx-swap='outerHTML' hx-select='#test4'>
+            <form hx-action='{$url}' hx-method='post' hx-target='#test4' hx-swap='outerMorph'>
                 {$payload}
                 
                 <div class='uk-margin'>

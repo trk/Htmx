@@ -41,7 +41,7 @@ class Test10Validation extends Component
         <div class='uk-card uk-card-default uk-card-body' id='test10'>
             <h3 class='uk-card-title'>Test 10: Validation State</h3>
             {$alertHtml}
-            <form hx-post='{$this->requestUrl()}' hx-target='#test10' hx-swap='outerHTML' hx-select='#test10'>
+            <form hx-action='{$this->requestUrl()}' hx-method='post' hx-target='#test10' hx-swap='outerMorph'>
                 {$this->renderStatePayload()}
                 
                 <div class='uk-margin'>
@@ -52,7 +52,7 @@ class Test10Validation extends Component
                            value='" . htmlspecialchars($this->email, ENT_QUOTES) . "'>
                 </div>
 
-                <button type='submit' name='hx__action' value='subscribe' class='uk-button uk-button-primary'>Subscribe</button>
+                <button type='submit' name='__htmx_action' value='subscribe' class='uk-button uk-button-primary'>Subscribe</button>
             </form>
         </div>";
     }

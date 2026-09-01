@@ -1,9 +1,10 @@
+<?php declare(strict_types=1); ?>
 <div class='uk-card uk-card-default uk-card-body uk-margin'>
     <h3 class='uk-card-title'>Test 8: Update Multiple Fields</h3>
-    <form method='POST' hx-post='<?= $this->requestUrl() ?>'>
+    <form hx-action='<?= $this->requestUrl() ?>' hx-method='post'>
         <?= $this->renderStatePayload() ?>
-        <input type='hidden' name='hx__action' value='saveAll'>
-        
+        <input type='hidden' name='__htmx_action' value='saveAll'>
+
         <div class='uk-margin'>
             <label class='uk-form-label'>Page Title</label>
             <div class='uk-form-controls'>

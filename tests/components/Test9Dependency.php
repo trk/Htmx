@@ -33,9 +33,9 @@ class Test9Dependency extends Component
             <h3 class='uk-card-title'>Test 9: Object Dependency</h3>
             <p>Bound to Page: <strong>{$title}</strong></p>
             <p>Pings: <strong>{$this->clicks}</strong></p>
-            <form hx-post='{$this->requestUrl()}' hx-target='#test9' hx-swap='outerHTML' hx-select='#test9'>
+            <form hx-action='{$this->requestUrl()}' hx-method='post' hx-target='#test9' hx-swap='outerMorph'>
                 {$this->renderStatePayload()}
-                <button type='submit' name='hx__action' value='ping' class='uk-button uk-button-default'>Ping!</button>
+                <button type='submit' name='__htmx_action' value='ping' class='uk-button uk-button-default'>Ping!</button>
             </form>
         </div>";
     }
