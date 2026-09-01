@@ -8,7 +8,18 @@ use ProcessWire\WireData;
 
 /**
  * Request
- * Represents the incoming HX-* headers parsing.
+ * Represents the incoming HX-* headers parsing for HTMX v4.
+ *
+ * HTMX v4 header reference:
+ *  - HX-Request: "true" for every htmx request
+ *  - HX-Boosted: "true" when hx-boost is active
+ *  - HX-History-Restore-Request: "true" for history traversal
+ *  - HX-Current-URL: the URL of the browser address bar
+ *  - HX-Target: target descriptor "tagName#id" (HTMX v4 format)
+ *  - HX-Source: source trigger descriptor "tagName#id" (HTMX v4, replaces HX-Trigger)
+ *  - HX-Request-Type: "full" or "partial" (HTMX v4 new)
+ *  - HX-Prompt: user response to hx-prompt (requires hx-prompt extension)
+ *  - Accept: text/html (new standard header)
  */
 class Request extends WireData
 {
@@ -50,11 +61,43 @@ class Request extends WireData
     }
 
     /**
+     * HTMX v4 new: HX-Request-Type is "full" (boosted page load) or "partial" (fragment request).
+     */
+    public function requestType(): ?string
+    {
+        return $this->getHeader('HTTP_HX_REQUEST_TYPE');
+    }
+
+    /**
+     * Whether the current HTMX request represents a full-page boosted load.
+     */
+    public function isFullPage(): bool
+    {
+        return $this->requestType() === 'full';
+    }
+
+    /**
+     * Whether the current HTMX request represents a partial fragment swap.
+     */
+    public function isPartial(): bool
+    {
+        return $this->requestType() === 'partial';
+    }
+
+    /**
      * Get the ID of the target element.
      */
     public function target(): ?string
     {
         return $this->extractElementId($this->rawTarget());
+    }
+
+    /**
+     * Get the tag name of the target element from the HTMX v4 descriptor (tagName#id form).
+     */
+    public function targetTag(): ?string
+    {
+        return $this->extractTagName($this->rawTarget());
     }
 
     /**
@@ -76,25 +119,65 @@ class Request extends WireData
     }
 
     /**
-     * Get the raw HTMX source descriptor as sent by the browser.
-     *
-     * In HTMX v4 this is typically "tag#id" or just "tag".
+     * Get the tag name of the triggering/source element from the HTMX v4 descriptor.
      */
-    public function rawSource(): ?string
+    public function sourceTag(): ?string
     {
-        return $this->getHeader('HX-Source') ?? $this->getHeader('HTTP_HX_TRIGGER');
+        return $this->extractTagName($this->rawSource());
     }
 
     /**
-     * Get the name of the triggering element.
+     * Get the raw HTMX source descriptor as sent by the browser.
+     *
+     * In HTMX v4 this is "tagName#id" via HX-Source (replaces the old HX-Trigger header).
+     * Falls back to legacy HX-Trigger header for soft backward compatibility.
+     */
+    public function rawSource(): ?string
+    {
+        return $this->getHeader('HTTP_HX_SOURCE') ?? $this->getHeader('HTTP_HX_TRIGGER');
+    }
+
+    /**
+     * Alias of rawSource() for readable DX. Matches header name HX-Source (HTMX v4).
+     */
+    public function source(): ?string
+    {
+        return $this->rawSource();
+    }
+
+    /**
+     * HTMX v4 removed the dedicated HX-Trigger-Name header.
+     * This helper extracts the "name" attribute when available via a secondary
+     * mechanism: the htmx-internal `__htmx_trigger_name` POST field (if present),
+     * or the name attribute embedded by extensions. For strict HTMX v4, prefer
+     * source() / sourceTag() / trigger() instead.
      */
     public function triggerName(): ?string
     {
-        return $this->getHeader('HTTP_HX_TRIGGER_NAME');
+        $name = $this->getHeader('HTTP_HX_TRIGGER_NAME');
+        if (is_string($name) && $name !== '') {
+            return $name;
+        }
+
+        try {
+            $input = $this->wire('input');
+            if ($input && method_exists($input, 'post')) {
+                $fallback = $input->post('__htmx_trigger_name');
+                if (is_string($fallback) && $fallback !== '') {
+                    return $fallback;
+                }
+            }
+        } catch (\Throwable $e) {
+            // fall through
+        }
+
+        return null;
     }
 
     /**
      * Get the user response to an hx-prompt.
+     *
+     * Note: in HTMX v4 this header is only present when the hx-prompt extension is loaded.
      */
     public function prompt(): ?string
     {
@@ -124,7 +207,6 @@ class Request extends WireData
     {
         $session = $this->wire('session');
 
-        // Null-safe guards: Session or CSRF manager may be unavailable in CLI / bootstrap issues.
         if ($session === null || !isset($session->CSRF) || !is_object($session->CSRF)) {
             if ($throwException) {
                 throw new \ProcessWire\WirePermissionException("CSRF Validation Failed: Session CSRF manager unavailable.");
@@ -160,15 +242,12 @@ class Request extends WireData
      */
     private function getHeader(string $name): ?string
     {
-        // 1. Normalize: derive canonical header name for getallheaders/InputfieldHttp
-        //    HTTP_HX_REQUEST -> HX-Request
         $canonical = $name;
         if (strpos($name, 'HTTP_') === 0) {
             $canonical = substr($name, 5);
             $canonical = str_replace('_', '-', $canonical);
         }
 
-        // 2. ProcessWire Input API (available since PW 3.0.178 / 3.0.229)
         $input = $this->wire('input');
         if ($input && method_exists($input, 'getHeader')) {
             try {
@@ -185,12 +264,9 @@ class Request extends WireData
             }
         }
 
-        // 3. Native getallheaders() polyfill — works with Apache/PHP-FPM/Litespeed,
-        //    properly populates even with rewritten proxied requests
         if (function_exists('getallheaders')) {
             $headers = @getallheaders();
             if (is_array($headers) && !empty($headers)) {
-                // Case-insensitive lookup: HX-Request, hx-request, X-Forwarded-For etc.
                 foreach ($headers as $k => $v) {
                     if (is_string($k) && strcasecmp($k, $canonical) === 0) {
                         return is_string($v) ? $v : (string) $v;
@@ -202,13 +278,10 @@ class Request extends WireData
             }
         }
 
-        // 4. Fallback: raw $_SERVER lookup (original CGI names like HTTP_HX_REQUEST)
         if (isset($_SERVER[$name]) && is_scalar($_SERVER[$name])) {
             return (string) $_SERVER[$name];
         }
 
-        // 5. Also try the canonical name prefixed with HTTP_ in $_SERVER
-        //    (in case caller passed HX-Request style)
         $httpKey = 'HTTP_' . strtoupper(str_replace('-', '_', $canonical));
         if ($httpKey !== $name && isset($_SERVER[$httpKey]) && is_scalar($_SERVER[$httpKey])) {
             return (string) $_SERVER[$httpKey];
@@ -241,11 +314,37 @@ class Request extends WireData
             return preg_match(self::HTML_ID_PATTERN, $candidate) === 1 ? $candidate : null;
         }
 
-        if ($value[0] === '#') {
+        if (isset($value[0]) && $value[0] === '#') {
             $candidate = substr($value, 1);
             return preg_match(self::HTML_ID_PATTERN, $candidate) === 1 ? $candidate : null;
         }
 
         return preg_match(self::HTML_ID_PATTERN, $value) === 1 ? $value : null;
+    }
+
+    /**
+     * Extract the tag name prefix from an HTMX v4 element descriptor ("tagName#id" form).
+     *
+     * Examples:
+     *   "button#save"  => "button"
+     *   "div"          => "div"
+     *   "#target"      => null (no tag prefix)
+     */
+    private function extractTagName(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim($value);
+        if ($value === '' || $value[0] === '#') {
+            return null;
+        }
+
+        $hashPos = strpos($value, '#');
+        $tag = $hashPos !== false ? substr($value, 0, $hashPos) : $value;
+        $tag = trim($tag);
+
+        return $tag !== '' && preg_match('/^[A-Za-z][A-Za-z0-9\-]*$/', $tag) === 1 ? strtolower($tag) : null;
     }
 }

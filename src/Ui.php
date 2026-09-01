@@ -12,19 +12,21 @@ use function ProcessWire\wire;
 
 /**
  * Ui
- * 
- * Base class for all visual HTML components. Provides easy manipulation of ParameterBag 
+ *
+ * Base class for all visual HTML components. Provides easy manipulation of ParameterBag
  * and AttributeBag to render clean, safe HTML without string concatenation mess.
+ *
+ * HTMX v4 helpers added:
+ *   action(), method(), query(), config(), ignore(), validate(), status()
+ *   The hx() helper accepts :inherited and :append modifier suffixes on the key.
  */
 abstract class Ui
 {
     public ParameterBag $parameters;
     public AttributeBag $attributes;
 
-    // State-Aware Integration
     public ?Component $component = null;
 
-    // Parent-Child Relationship Properties
     public ?Ui $parent = null;
 
     /** @var array<int, Ui|string> */
@@ -37,9 +39,6 @@ abstract class Ui
     /** @var array<string, mixed> Default parameters automatically merged into the component */
     public array $defaultParams = [];
 
-    /**
-     * @var Htmx|null Quick access to the HTMX module API
-     */
     protected ?Htmx $htmx = null;
 
     /**
@@ -52,26 +51,19 @@ abstract class Ui
 
     public function __construct(array|ParameterBag $parameters = [], array|AttributeBag $attributes = [])
     {
-        // Assign HTMX API instance
         $this->htmx = wire('htmx');
 
-        // Handle parameters
         $this->parameters = $parameters instanceof ParameterBag
             ? $parameters
             : new ParameterBag($parameters);
 
         $this->parameters->defaults($this->defaultParams);
 
-        // Handle attributes
         $this->attributes = $attributes instanceof AttributeBag
             ? $attributes
             : new AttributeBag($attributes);
     }
 
-    /**
-     * Get the element's ID. 
-     * If it doesn't have one, dynamically generate and assign a unique ID.
-     */
     public function getId(): string
     {
         if (!$this->attributes->has('id')) {
@@ -81,9 +73,6 @@ abstract class Ui
         return $this->attributes->get('id');
     }
 
-    /**
-     * Get or set a parameter fluently.
-     */
     public function param(string $key, mixed $value = null): mixed
     {
         if (func_num_args() === 1) {
@@ -94,76 +83,52 @@ abstract class Ui
         return $this;
     }
 
-    /**
-     * Helper to safely escape strings for HTML output.
-     */
     protected function esc(mixed $value): string
     {
         return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
     }
 
-    /**
-     * Set a parameter and return self for chaining.
-     */
     public function setParam(string $key, mixed $value): self
     {
         $this->parameters->set($key, $value);
         return $this;
     }
 
-    /**
-     * Set a custom HTML attribute dynamically.
-     */
     public function setAttribute(string $key, mixed $value, bool $asJson = false): self
     {
         $this->attributes->set($key, $value, $asJson);
         return $this;
     }
 
-    /**
-     * Check if a custom HTML attribute exists.
-     */
     public function hasAttribute(string $key): bool
     {
         return $this->attributes->has($key);
     }
 
-    /**
-     * Get a custom HTML attribute.
-     */
     public function getAttribute(string $key, mixed $default = null): mixed
     {
         return $this->attributes->get($key, $default);
     }
 
-    /**
-     * Add a CSS class and return self for chaining.
-     */
     public function addClass(string|array $class): self
     {
         $this->attributes->addClass($class);
         return $this;
     }
 
-    /**
-     * Remove a CSS class and return self for chaining.
-     */
     public function removeClass(string|array $class): self
     {
         $this->attributes->removeClass($class);
         return $this;
     }
 
-    /**
-     * Helper to set custom data-* attributes.
-     */
     public function data(string $key, mixed $value, bool $asJson = false): self
     {
         return $this->setAttribute("data-{$key}", $value, $asJson);
     }
 
     /**
-     * Helper to set a raw htmx-* attribute dynamically.
+     * @deprecated Use hx() instead — the "htmx" prefix was never a standard attribute.
      */
     public function htmx(string $key, mixed $value, bool $asJson = false): self
     {
@@ -171,7 +136,11 @@ abstract class Ui
     }
 
     /**
-     * Helper to set a raw hx-* attribute dynamically.
+     * Set a raw hx-* attribute dynamically.
+     *
+     * Accepts HTMX v4 modifier suffixes directly on the key:
+     *   $ui->hx('confirm:inherited', 'Are you sure?');
+     *   $ui->hx('include:inherited:append', '.extra-fields');
      */
     public function hx(string $key, mixed $value, bool $asJson = false): self
     {
@@ -179,18 +148,116 @@ abstract class Ui
     }
 
     /**
+     * HTMX v4: hx-action — set the request URL (use alongside hx-method).
+     *
+     * Example: $ui->action('/save')->method('POST');
+     */
+    public function action(string $url): self
+    {
+        return $this->setAttribute('hx-action', $url);
+    }
+
+    /**
+     * HTMX v4: hx-method — set the HTTP method (GET, POST, PUT, DELETE, PATCH, QUERY, ...).
+     */
+    public function method(string $httpMethod): self
+    {
+        return $this->setAttribute('hx-method', strtoupper($httpMethod));
+    }
+
+    /**
+     * HTMX v4: hx-query — issue a QUERY request (body-borne search params, like a POST body for search).
+     */
+    public function query(string $url): self
+    {
+        return $this->setAttribute('hx-query', $url);
+    }
+
+    /**
+     * HTMX v4: hx-config — per-element request configuration.
+     *
+     * Accepts either a raw string ("timeout:5000 history:false") or an array which
+     * will be JSON-encoded automatically.
+     *
+     * Example:
+     *   $ui->config(['timeout' => 5000, 'credentials' => true]);
+     *   $ui->config('timeout:5000 history:false');
+     */
+    public function config(string|array $value): self
+    {
+        if (is_array($value)) {
+            return $this->setAttribute('hx-config', $value, true);
+        }
+        return $this->setAttribute('hx-config', $value);
+    }
+
+    /**
+     * HTMX v4: hx-ignore — tell htmx to skip processing this element entirely.
+     *
+     * (Replaces the old htmx 2 meaning of `hx-disable`.)
+     */
+    public function ignore(bool $ignore = true): self
+    {
+        if ($ignore) {
+            return $this->setAttribute('hx-ignore', true);
+        }
+        $this->attributes->remove('hx-ignore');
+        return $this;
+    }
+
+    /**
+     * HTMX v4: hx-disable — disable matching elements during a request.
+     *
+     * (Replaces the old htmx 2 `hx-disabled-elt` attribute.)
+     *
+     * Accepts a CSS selector, or pass `true` / no argument for the nearest form/button convention.
+     */
+    public function disable(bool|string $selector = true): self
+    {
+        if ($selector === false) {
+            $this->attributes->remove('hx-disable');
+            return $this;
+        }
+        return $this->setAttribute('hx-disable', is_string($selector) ? $selector : true);
+    }
+
+    /**
+     * HTMX v4: hx-validate — control native form validation behavior for this element.
+     *
+     * Pass `true` to force validation, `false` to skip it, or a raw modifier string.
+     */
+    public function validate(bool|string $value = true): self
+    {
+        if ($value === false) {
+            $this->attributes->remove('hx-validate');
+            return $this;
+        }
+        return $this->setAttribute('hx-validate', is_string($value) ? $value : true);
+    }
+
+    /**
+     * HTMX v4: hx-status — set per-status swap/target/push/replace/transition behavior.
+     *
+     * Examples:
+     *   $ui->status(422, 'swap:innerHTML target:#errors');
+     *   $ui->status('5xx', 'swap:none push:false');
+     */
+    public function status(int|string $code, string $config): self
+    {
+        $code = is_int($code) ? (string) $code : $code;
+        return $this->setAttribute("hx-status:{$code}", $config);
+    }
+
+    /**
      * Helper to configure this element as an action trigger.
      * Sets: name="hx__action" value="$actionName"
      */
-    public function action(string $actionName): self
+    public function actionTrigger(string $actionName): self
     {
         return $this->setAttribute('name', 'hx__action')
             ->setAttribute('value', $actionName);
     }
 
-    /**
-     * Easily render the Stateful Component's payload if this Ui is bound to a Component.
-     */
     public function renderState(): string
     {
         if ($this->component) {
@@ -199,31 +266,17 @@ abstract class Ui
         return '';
     }
 
-    /**
-     * Syntactic sugar for setting Hyperscript.
-     * Cleans up newlines and extra spaces automatically.
-     */
     public function hyperscript(string $script): self
     {
-        // Clean up multiline hyperscript strings for cleaner output
         $cleanScript = preg_replace('/\s+/', ' ', trim($script));
-        return $this->setAttribute('_', $cleanScript);
+        return $this->setAttribute('_', is_string($cleanScript) ? $cleanScript : $script);
     }
 
-    /**
-     * Short alias for hyperscript().
-     */
     public function _(string $script): self
     {
         return $this->hyperscript($script);
     }
 
-    /**
-     * DX helper: pass translation calls through to ProcessWire's global translator when available.
-     * Falls back to the raw text when the ProcessWire API is not reachable.
-     *
-     * Usage inside Ui render(): $this->__('Click Me')
-     */
     public function __(string $text, string $textdomain = 'site-htmx'): string
     {
         try {
@@ -237,26 +290,12 @@ abstract class Ui
         return $text;
     }
 
-    /**
-     * Core render method that concrete classes must implement.
-     */
     abstract public function render(): string;
 
-    /**
-     * Lifecycle hook executed just before render().
-     * Children can override this to prepare state/attributes.
-     */
     protected function beforeRender(): void {}
 
-    /**
-     * Lifecycle hook executed immediately after render().
-     * Children can override this to modify the final HTML.
-     */
     protected function afterRender(string &$html): void {}
 
-    /**
-     * DOM Tree Management: Add a child component/string
-     */
     public function addChild(Ui|string $child): self
     {
         if ($child instanceof Ui) {
@@ -266,9 +305,6 @@ abstract class Ui
         return $this;
     }
 
-    /**
-     * DOM Tree Management: Add multiple children
-     */
     public function addChildren(array $children): self
     {
         foreach ($children as $child) {
@@ -277,9 +313,6 @@ abstract class Ui
         return $this;
     }
 
-    /**
-     * Recursively find a child by its logical name or specific parameter value.
-     */
     public function findChild(?string $name, ?string $paramKey = null, mixed $paramValue = null): ?Ui
     {
         foreach ($this->children as $child) {
@@ -299,34 +332,22 @@ abstract class Ui
         return null;
     }
 
-    /**
-     * Get a specific child element by index
-     */
     public function getChild(int $index): Ui|string|null
     {
         return $this->children[$index] ?? null;
     }
 
-    /**
-     * Return all children
-     */
     public function getChildren(): array
     {
         return $this->children;
     }
 
-    /**
-     * Recursively finds and renders a specific child component.
-     */
     public function renderChild(?string $name, ?string $paramKey = null, mixed $paramValue = null): string
     {
         $child = $this->findChild($name, $paramKey, $paramValue);
         return $child ? (string)$child : '';
     }
 
-    /**
-     * Renders all currently registered children sequentially.
-     */
     public function renderChildren(): string
     {
         $html = '';
@@ -336,17 +357,11 @@ abstract class Ui
         return $html;
     }
 
-    /**
-     * Get the parent component if it exists
-     */
     public function getParent(): ?Ui
     {
         return $this->parent;
     }
 
-    /**
-     * Traverse up the tree to find the closest parent mapping the given logical name, class name, or parameter.
-     */
     public function findParent(?string $name, ?string $paramKey = null, mixed $paramValue = null): ?Ui
     {
         $current = $this->parent;
@@ -372,26 +387,16 @@ abstract class Ui
         return null;
     }
 
-    /**
-     * Total number of child components
-     */
     public function count(): int
     {
         return count($this->children);
     }
 
-    /**
-     * Determines if the component should be rendered.
-     * Child classes can override this to enforce required parameters or conditions.
-     */
     public function renderReady(): bool
     {
         return true;
     }
 
-    /**
-     * Magic string casting implicitly calls render() securely with lifecycle hooks
-     */
     public function __toString(): string
     {
         try {

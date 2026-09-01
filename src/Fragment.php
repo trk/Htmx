@@ -9,16 +9,27 @@ use ProcessWire\WireData;
 /**
  * Fragment
  * Manages rendering isolated components and OOB (Out-Of-Band) swaps.
+ *
+ * HTMX v4 adds:
+ *  - New swap styles: innerMorph, outerMorph, textContent, delete (plus aliases before/after/prepend/append)
+ *  - <hx-partial> elements as an alternative to hx-swap-oob for explicit multi-target responses
  */
 class Fragment extends WireData
 {
+    /** @var array<int, string> Raw OOB swap fragments queued for this request. */
     private array $oobSwaps = [];
+
+    /** @var array<int, array{target: string, html: string, swap: string, select: string|null}> Queued <hx-partial> elements. */
+    private array $partials = [];
 
     /**
      * Whitelist of HTMX-valid hx-swap-oob / hx-swap values accepted by strict mode.
-     * These match the current HTMX v4 swap vocabulary used by the module.
      *
-     * Append modifiers (e.g. innerHTML show:#foo) are validated separately after the base.
+     * HTMX v4 vocabulary:
+     *  - Core:       innerHTML, outerHTML, beforebegin, afterbegin, beforeend, afterend, delete, none
+     *  - Aliases:    before (=beforebegin), after (=afterend), prepend (=afterbegin), append (=beforeend)
+     *  - Morph:      innerMorph, outerMorph, morphdom, morph
+     *  - Text-only:  textContent
      */
     private const VALID_SWAP_BASE = [
         'innerHTML',
@@ -30,7 +41,16 @@ class Fragment extends WireData
         'delete',
         'none',
         'morphdom',
-        'morph' // Morph-style extensions / plugins
+        'morph',
+        // HTMX v4 aliases
+        'before',
+        'after',
+        'prepend',
+        'append',
+        // HTMX v4 native morph + text swap styles
+        'innermorph',
+        'outermorph',
+        'textcontent',
     ];
 
     private function isValidHtmlId(string $id): bool
@@ -50,10 +70,11 @@ class Fragment extends WireData
     }
 
     /**
-     * Validate a swap style against the HTMX spec whitelist (with optional modifiers).
+     * Validate a swap style against the HTMX v4 spec whitelist (with optional modifiers).
      *
      * Allowed shape: <base-swap> [modifier1 modifier2 ...]
      *   e.g. innerHTML show:#target swap:1s settle:500ms
+     * Also allows the hx-swap-oob selector form: "afterend:#some-id"
      */
     private function isValidSwapStyle(string $swapStyle): bool
     {
@@ -67,8 +88,6 @@ class Fragment extends WireData
         if (strpos($swapStyle, ':') !== false) {
             $parts = explode(':', $swapStyle, 2);
             $base = $parts[0] === '' ? 'outerHTML' : $parts[0];
-            // Everything after the colon is selector / modifiers — skip deep check, just
-            // ensure no raw CR/LF that would break attribute escaping
             $rest = $parts[1] ?? '';
             if (strcspn($rest, "\r\n\0") !== strlen($rest)) {
                 return false;
@@ -84,6 +103,10 @@ class Fragment extends WireData
 
     /**
      * Store HTML to be swapped out-of-band at the end of the request.
+     *
+     * By default the HTML is wrapped (if needed) so hx-swap-oob="outerHTML"
+     * targets the given selector. Pass a selector starting with "#" for best
+     * strict-mode compatibility.
      */
     public function addOobSwap(string $selector, string $html, string $swapStyle = 'outerHTML'): self
     {
@@ -104,7 +127,6 @@ class Fragment extends WireData
             }
         }
 
-        // 1. Swap-style validation (strict mode on by default, can be opted out)
         if ($strictSwap || !$htmx) {
             if (!$this->isValidSwapStyle($swapStyle)) {
                 $config = $this->wire('config');
@@ -116,12 +138,10 @@ class Fragment extends WireData
                         );
                     }
                 }
-                // Safe default fallback — never use user-supplied style
                 $swapStyle = 'outerHTML';
             }
         }
 
-        // 2. ID / selector strictness validation
         if ($strictId) {
             $isStrictIdSelector = $startsWithHash
                 ? (bool) preg_match('/^#[A-Za-z][A-Za-z0-9\-_:.]*$/', $selector)
@@ -140,19 +160,15 @@ class Fragment extends WireData
 
         $id = $this->normalizeHtmlId($rawId);
 
-        // Try to inject natively if the HTMl root node contains the target ID.
-        // This avoids destructive <div> wrappers breaking tables or semantic structures.
         $pattern = '/^(<[a-zA-Z0-9\-]+)([^>]*id=[\'"]' . preg_quote($id, '/') . '[\'"][^>]*)(>)/i';
 
         if (preg_match($pattern, $html)) {
-            // Inject hx-swap-oob into the existing root node
             $wrapped = preg_replace(
                 $pattern,
                 '$1$2 hx-swap-oob="' . htmlspecialchars($swapStyle, ENT_QUOTES, 'UTF-8') . '"$3',
                 $html
             );
         } else {
-            // Fallback: wrap it in a div targeting the ID/selector
             $wrapped = sprintf(
                 '<div id="%s" hx-swap-oob="%s">%s</div>',
                 htmlentities($id, ENT_QUOTES, 'UTF-8'),
@@ -161,16 +177,81 @@ class Fragment extends WireData
             );
         }
 
-        $this->oobSwaps[] = $wrapped;
+        if (is_string($wrapped) && $wrapped !== '') {
+            $this->oobSwaps[] = $wrapped;
+        }
+
         return $this;
     }
 
     /**
-     * Get all currently queued OOB swaps as a single string.
+     * HTMX v4 alternative to OOB swaps. Queues an <hx-partial> element with
+     * its own explicit target, swap style, and optional sub-selector.
+     *
+     * Use this when you want response-local control of multi-target updates
+     * without depending on id attributes matching inside the returned HTML.
+     *
+     * @link https://four.htmx.org/docs#partials-hx-partial
+     */
+    public function addPartial(
+        string $target,
+        string $html,
+        string $swapStyle = 'innerHTML',
+        ?string $select = null
+    ): self {
+        $target = trim($target);
+        $html = trim($html);
+        if ($target === '' || $html === '') {
+            return $this;
+        }
+
+        $strictSwap = false;
+        $htmx = $this->wire('htmx');
+        if ($htmx && isset($htmx->oobStrictSwapStyle)) {
+            $strictSwap = (bool) $htmx->oobStrictSwapStyle;
+        }
+
+        if ($strictSwap && !$this->isValidSwapStyle($swapStyle)) {
+            $config = $this->wire('config');
+            if ($config && $config->debug) {
+                $log = $this->wire('log');
+                if ($log) {
+                    $log->warning('HTMX Partial strict-swap rejected invalid swapStyle: ' . $swapStyle);
+                }
+            }
+            $swapStyle = 'innerHTML';
+        }
+
+        $this->partials[] = [
+            'target' => $target,
+            'html'   => $html,
+            'swap'   => $swapStyle,
+            'select' => $select,
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Get all currently queued OOB swaps + <hx-partial> elements as a single string
+     * ready to append to the response body.
      */
     public function getOobSwaps(): string
     {
-        return implode("\n", $this->oobSwaps);
+        $pieces = $this->oobSwaps;
+
+        // Render queued <hx-partial> elements after OOB entries (document order).
+        foreach ($this->partials as $p) {
+            $targetAttr = 'hx-target="' . htmlspecialchars($p['target'], ENT_QUOTES, 'UTF-8') . '"';
+            $swapAttr   = 'hx-swap="' . htmlspecialchars($p['swap'], ENT_QUOTES, 'UTF-8') . '"';
+            $selectAttr = $p['select'] !== null
+                ? ' hx-select="' . htmlspecialchars($p['select'], ENT_QUOTES, 'UTF-8') . '"'
+                : '';
+
+            $pieces[] = "<hx-partial {$targetAttr} {$swapAttr}{$selectAttr}>\n" . $p['html'] . "\n</hx-partial>";
+        }
+
+        return implode("\n", $pieces);
     }
 
     /**
