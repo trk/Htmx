@@ -80,6 +80,7 @@ This module supports **instance-specific state keys** to avoid collisions:
 ```php
 // Example: render two independent components inside the same ProcessWire form.
 // Key idea: make hx-target unique and set an instance-specific state key that matches it.
+// HTMX 4 syntax: hx-action + hx-method + outerMorph swap.
 
 $targetId = 'blocks-editor-body';
 
@@ -88,7 +89,7 @@ $cmp = new \Htmx\Component\SomeComponent();
 $cmp->setStateKey('hx__state__' . $targetId);
 
 echo "<div id='{$targetId}'>";
-echo "<form hx-post='{$cmp->requestUrl()}' hx-target='#{$targetId}' hx-swap='outerHTML'>";
+echo "<form hx-action='{$cmp->requestUrl()}' hx-method='post' hx-target='#{$targetId}' hx-swap='outerMorph'>";
 echo $cmp->renderStatePayload();
 echo $cmp; // or $htmx->renderComponent(...)
 echo "</form>";
@@ -224,20 +225,22 @@ class LikeButton extends Component {
 
 ### 2. The Component View (`components/like-button.php`)
 
-Build the markup. You have full access to `$this` (the component context).
+Build the markup. You have full access to `$this` (the component context). HTMX 4 uses `hx-action` + `hx-method` syntax, with `__htmx_action` as the action trigger field name (NOT the old `hx__action`). `outerMorph` is the preferred swap style for v4.
 
 ```php
-<div id="<?= $this->id ?>" hx-post="./" hx-target="this">
-    <h3><?= $this->post->title; ?></h3>
-    <p>Total Likes: <?= $this->likes; ?></p>
+<div id="<?= $this->id() ?>">
+    <form hx-action="<?= $this->requestUrl() ?>" hx-method="post" hx-target="#<?= $this->id() ?>" hx-swap="outerMorph" hx-disable="#<?= $this->id() ?> :input">
+        <h3><?= $this->post->title; ?></h3>
+        <p>Total Likes: <?= $this->likes; ?></p>
 
-    <!-- Secure State Payload (Required to maintain state) -->
-    <?= $this->renderStatePayload(); ?>
+        <!-- Secure State Payload (Required to maintain state) -->
+        <?= $this->renderStatePayload(); ?>
 
-    <!-- Action Trigger (hx__action routes to the "like" method) -->
-    <button class="uk-button" type="submit" name="hx__action" value="like">
-        Like +1
-    </button>
+        <!-- Action Trigger (__htmx_action routes POST to the "like" method) -->
+        <button class="uk-button" type="submit" name="__htmx_action" value="like">
+            Like +1
+        </button>
+    </form>
 </div>
 ```
 
@@ -258,7 +261,7 @@ echo $htmx->renderComponent(LikeButton::class, [
 ```
 
 **Option B: Using a Render Method (e.g. A Click Counter)**
-You don't even need an external view file! Define a simple class with inline rendering:
+You don't even need an external view file! Define a simple class with inline rendering using **HTMX 4 syntax** (`hx-action` + `hx-method` + `outerMorph` + `__htmx_action`):
 
 ```php
 use Totoglu\Htmx\Component;
@@ -270,12 +273,16 @@ class ClickCounter extends Component {
     public function decrement(): void { $this->count--; }
 
     public function render(): string {
+        $id = 'counter-' . $this->id();
+        $url = $this->requestUrl();
         return "
-        <div id='counter-{$this->id}' hx-post='./' hx-target='this'>
-            <h3>Counter: {$this->count}</h3>
-            {$this->renderStatePayload()}
-            <button type='submit' name='hx__action' value='decrement'>-</button>
-            <button type='submit' name='hx__action' value='increment'>+</button>
+        <div id='{$id}'>
+            <form hx-action='{$url}' hx-method='post' hx-target='#{$id}' hx-swap='outerMorph'>
+                {$this->renderStatePayload()}
+                <h3>Counter: {$this->count}</h3>
+                <button type='submit' name='__htmx_action' value='decrement'>-</button>
+                <button type='submit' name='__htmx_action' value='increment'>+</button>
+            </form>
         </div>
         ";
     }
@@ -286,7 +293,7 @@ echo $htmx->renderComponent(ClickCounter::class, ['count' => 0]);
 ```
 
 **Option C: Using an Object-Oriented `Ui` Component**
-If you prefer a strictly typed, object-oriented DOM building approach, pass a `Totoglu\Htmx\Ui` subclass as the view:
+If you prefer a strictly typed, object-oriented DOM building approach, pass a `Totoglu\Htmx\Ui` subclass as the view. Use the **new v4 fluent helpers**:
 
 ```php
 // 1. Define your simple, reusable Ui Component
@@ -298,8 +305,12 @@ class Button extends \Totoglu\Htmx\Ui {
 }
 
 // 2. Instantiate and attach it to your State-Aware Component
-$btnView = new Button(['label' => 'Like +1', 'style' => 'primary']);
-$btnView->hx('post', './')->hx('target', 'this')->action('like');
+//    HTMX v4 helpers: action() + method() + actionTrigger()
+$btnView = Button::make(['label' => 'Like +1', 'style' => 'primary'])
+    ->action('./')
+    ->method('post')
+    ->target('this')
+    ->actionTrigger('like');   // injects name="__htmx_action" value="like" + type=submit
 
 // 3. The $btnView automatically merges with the Component state and lifecycle!
 echo $htmx->renderComponent(LikeButton::class, ['likes' => 0], $btnView);
@@ -321,42 +332,88 @@ Working with state on the client side requires strict validation to prevent tamp
 
 HTMX operates heavily on headers to control browser actions. The `htmx` API variable removes the headache of standard `header()` manipulations.
 
-### Inspecting Requests
+### Inspecting Requests (HTMX v4)
 
-*(Inside any `Component` or `Ui` class, you can access the API instantly via `$this->htmx` instead of using the global variable!)*
+_(Inside any `Component` or `Ui` class, you can access the API instantly via `$this->htmx` instead of using the global variable!)_
 
 ```php
 $htmx = wire('htmx');
+$r = $htmx->request;
 
-// Advanced Inspection
-if ($htmx->request->isHtmx()) {
-    $target  = $htmx->request->target();     // e.g. 'modal-content'
-    $source  = $htmx->request->rawSource();  // e.g. 'button#delete-btn'
+if ($r->isHtmx()) {
+    // === HTMX v4 NEW: Request Type (HX-Request-Type) ===
+    $requestType = $r->requestType();   // "full", "partial", or null
+    $isFullDoc   = $r->isFullPage();    // hx-boost full document request
+    $isPartial   = $r->isPartial();     // standard hx-* partial request
+
+    // Target element (HX-Target header)
+    $target    = $r->target();          // e.g. "#modal-content"
+    $targetTag = $r->targetTag();       // e.g. "div", "form" (tag name only)
+
+    // === HTMX v4 NEW: Source Element (HX-Source replaces HX-Trigger-Name) ===
+    $rawSource = $r->rawSource();       // e.g. "button#delete-user" or "button"
+    $sourceTag = $r->sourceTag();       // e.g. "button" (tag name only)
+    $trigger   = $r->triggerName();     // source id part, fallback to POST['__htmx_action']
+
+    // Other context headers
+    $isBoosted    = $r->isBoosted();
+    $promptAnswer = $r->prompt();
+    $isHistory    = $r->historyRestore();
+    $allHeaders   = $r->headers();      // all HX-* headers keyed without HX- prefix
 
     // Automatically validate ProcessWire CSRF with HTTP 403 handling
-    $htmx->request->validateCsrf(throwException: true);
+    $r->validateCsrf(throwException: true);
 }
 ```
 
-### Commanding Responses
+### Commanding Responses (HTMX v4)
 
-Inject actions right back to the browser:
+Inject actions right back to the browser. Deferred triggers (`afterSwap`/`afterSettle`) are encoded into **one single `HX-Trigger` header** and dispatched by the bundled `pw-htmx-runtime.js`:
 
 ```php
-// Redirect handling natively mapped to HTMX headers
-$htmx->response->redirect('/dashboard/');
-$htmx->response->pushUrl('/dashboard/?success=1');
+$resp = wire('htmx')->response;
 
-// Form Validation (Throws HTTP 422 internally; pair with hx-status on the client)
-$htmx->response->validationError('#form-errors-banner');
+// Redirects & navigation
+$resp->redirect('/dashboard/');
+$resp->pushUrl('/dashboard/?success=1');
+$resp->refresh();
 
-// Trigger Custom Frontend Events (Great for Alpine.js / Hyperscript interoperability)
-$htmx->response
-    ->trigger('cartUpdated', ['total' => 24.50])
-    ->triggerAfterSettle('closeModal');
+// === HTMX v4 NEW: Swap Modifiers ===
+$resp->retarget('#form-wrapper');                   // HX-Retarget
+$resp->reselect('#only-this-fragment');             // HX-Reselect (NEW v4: CSS-select sub-portion)
+$resp->noSwap();                                    // HX-Reswap: none — skip swapping
+$resp->reswap('outerMorph');                        // HX-Reswap: override swap style
 
-// Out-Of-Band (OOB) Fragment Swapping outside the active target!
-$htmx->fragment->addOobSwap('#header-cart', '<span>3</span>');
+// Form Validation: HTTP 422 + optional retarget + optional reselect
+// NOTE: HTMX v4 swaps 4xx/5xx by default! Use hx-status:422 on the client to customize.
+$resp->validationError(
+    target: '#form-wrapper',       // HX-Retarget (optional, null = same)
+    select: '#errors-panel',       // HX-Reselect (optional, v4 NEW)
+    httpCode: 422,                 // default
+);
+
+// === Event Triggers (deferred = single HX-Trigger header) ===
+$resp
+    ->trigger('cartUpdated', ['total' => 24.50])              // immediate dispatch
+    ->triggerAfterSwap('ui:refreshed', ['count' => 3])         // after swap
+    ->triggerAfterSettle('closeModal');                         // after settle / animations
+
+// === Fragment Swapping: OOB + v4 NEW <hx-partial> elements ===
+$frag = wire('htmx')->fragment;
+
+// Legacy OOB (still fully supported):
+$frag->addOobSwap('#header-cart', '<span id="header-cart">3</span>');
+
+// === HTMX v4 PREFERRED: <hx-partial> elements (addPartial) ===
+$frag->addPartial(
+    target: '#toast-container',
+    html:   '<div class="toast" id="toast-1">Added to cart ✔</div>',
+    swap:   'outerMorph',
+    select: null,
+);
+
+// Hyperscript out-of-band blocks:
+$frag->addHyperscript('document.body.classList.add("success")');
 ```
 
 ---
@@ -387,11 +444,17 @@ class Modal extends Ui {
 }
 
 // 2. Use the static make() for fluent chaining without the `new` keyword
+//    HTMX v4 fluent helpers: action(), method(), target(), swap(), config(), status(), etc.
 echo Modal::make(['title' => 'Warning!'])
     ->addClass('uk-modal-dialog')
     ->setAttribute('id', 'alert-modal')
-    ->hx('get', '/process/')
-    ->hx('target', '.content')
+    ->action('/process/')                 // hx-action="/process/" (v4 preferred)
+    ->method('get')                       // hx-method="get"
+    ->target('.content')                  // hx-target=".content"
+    ->swap('innerMorph')                  // hx-swap="innerMorph" (v4 morph swap)
+    ->config(['indicator' => '#spinner']) // hx-config='{...}' (v4 NEW)
+    ->status(500, 'swap:outerMorph')      // hx-status:500="..." (v4 NEW)
+    ->disable('#spinner')                 // hx-disable="..." (v4 NEW meaning)
     ->render();
 ```
 
@@ -426,18 +489,23 @@ With **Auto Target Extraction** enabled, if the browser requests a specific `#ta
 The module includes integration with `processwire-console` to easily generate boilerplate code for your Components and Ui elements.
 
 **Generate a Stateful Component:**
+
 ```bash
 php vendor/bin/wire make:htmx:component Auth/LoginModal
 ```
-*(By default, this generates `site/components/Auth/LoginModal.php` based on your module settings)*
+
+_(By default, this generates `site/components/Auth/LoginModal.php` based on your module settings)_
 
 **Generate a Stateless Ui Element:**
+
 ```bash
 php vendor/bin/wire make:htmx:ui Card/Header
 ```
-*(Generates `site/ui/Card/Header.php`)*
+
+_(Generates `site/ui/Card/Header.php`)_
 
 You can also override the destination directory on the fly using the `--dir` option (useful for packing components inside independent modules):
+
 ```bash
 php vendor/bin/wire make:htmx:ui Card/Header --dir=site/modules/MyCustomModule/ui
 ```
@@ -464,10 +532,11 @@ These isolated checks help detect side-effects if you build structural configura
 This module adheres to a strict architectural standard designed to facilitate 0-hallucination AI generation. If you are using an AI assistant (like Cursor, GitHub Copilot, or Claude) to develop Components or UIs for this module, you should direct your AI to read the `AGENTS.md` file located in the root directory.
 
 AI assistants can ingest `AGENTS.md` to automatically understand:
-* The strict Component and Ui architecture.
-* The explicit rule to mutate `public` properties rather than using `setState()`.
-* How to properly dispatch `HTMX` headers for triggers and out-of-band swaps via `$this->htmx`.
-* Correct ProcessWire method signatures and dependencies.
+
+- The strict Component and Ui architecture.
+- The explicit rule to mutate `public` properties rather than using `setState()`.
+- How to properly dispatch `HTMX` headers for triggers and out-of-band swaps via `$this->htmx`.
+- Correct ProcessWire method signatures and dependencies.
 
 By referencing `AGENTS.md`, you ensure that AI outputs perfectly functional, secure, and production-ready `Htmx` code without framework confusion.
 
