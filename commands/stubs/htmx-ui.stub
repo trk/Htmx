@@ -12,12 +12,34 @@ class {{className}} extends Ui
 
     public array $defaultParams = [
         // 'message' => 'Default message',
+        // 'variant' => 'primary',
     ];
 
     public function render(): string
     {
+        // HTMX v4 Ui helpers (chainable fluent API):
+        // $this->action('/submit')->method('post');              // hx-action + hx-method
+        // $this->query('/search');                              // hx-query
+        // $this->config(['history' => false]);                  // hx-config (JSON encoded)
+        // $this->ignore();                                      // hx-ignore (skip htmx processing)
+        // $this->disable();                                     // hx-disable (disable UI during request)
+        // $this->validate();                                    // hx-validate
+        // $this->status(422, 'swap:outerMorph target:#errors'); // hx-status:422
+        // $this->actionTrigger('save');                         // submit with __htmx_action=save
+        // $this->swap('outerMorph')->target('#wrapper');        // hx-swap, hx-target (legacy helpers)
+
+        // Parameter access (strict typed):
+        // $this->parameters->getString('message');
+        // $this->parameters->getInt('count');
+        // $this->parameters->getBool('enabled');
+        // $this->parameters->getArray('items');
+        // $this->param('message');  // mixed, quick access
+
+        // Attribute manipulation (chainable):
+        // $this->attributes->addClass('uk-card')->id('my-id')->data('foo', 'bar');
+
         return "<div {$this->attributes->render()}>
-            <!-- Your UI markup here -->
+            <!-- Your Ui markup here -->
             {$this->renderChildren()}
         </div>";
     }

@@ -10,28 +10,57 @@ class {{className}} extends Component
 {
     public function mount(): void
     {
-        // One-time initialization logic
+        // One-time initialization logic (runs once on first render, not on rehydration)
     }
 
     public function fill(array $props): self
     {
-        // Dependency injection logic
+        // Dependency injection logic (receives props passed via renderComponent(Class::class, $props))
         return $this;
+    }
+
+    /**
+     * Example mutation action — triggered when a form submits __htmx_action=yourAction
+     * or a button with actionTrigger('yourAction') is clicked.
+     */
+    public function yourAction(): void
+    {
+        // Mutate component state via public properties. No setState() API exists.
+        // $this->someProp = $newValue;
+
+        // Available helpers for HTMX v4 responses:
+        // $this->htmx->response->trigger('someEvent', ['data' => 1]);
+        // $this->htmx->response->retarget('#other-target');
+        // $this->htmx->response->reselect('#only-this');
+        // $this->htmx->response->noSwap();
+        // $this->htmx->fragment->addOobSwap('#sidebar-count', "<span id='sidebar-count'>5</span>");
+        // $this->htmx->fragment->addPartial('#toast', "<div id='toast' hx-swap='outerMorph'>Saved</div>");
+        // $this->validationError('#form-wrapper', '#form-wrapper', 422);
     }
 
     public function render(): string
     {
-        // Use hx-vals to pass the action method you want to trigger
-        // $vals = json_encode(['hx__action' => 'yourAction']);
+        $url = $this->requestUrl();
+        $id  = 'hxc_' . $this->id();
+
+        // HTMX v4 preferred form syntax: hx-action + hx-method + outerMorph swap
+        // Use Ui::make()->actionTrigger('yourAction') for submit buttons that carry action names.
 
         return "
-        <div id='hxc_{$this->id()}'>
-            <form hx-post='{$this->requestUrl()}' hx-target='#hxc_{$this->id()}' hx-swap='outerHTML'>
+        <div id='{$id}'>
+            <form hx-action='{$url}' hx-method='post' hx-target='#{$id}' hx-swap='outerMorph'>
                 {$this->renderStatePayload()}
-                
+
                 <div>
                     <!-- Your component markup here -->
-                    Hello {{className}} Component!
+                    <h3>{{className}} Component</h3>
+                    <p class='uk-text-meta'>HTMX v4 ready: hx-action/hx-method, outerMorph, signed state payload.</p>
+                </div>
+
+                <div class='uk-margin-top'>
+                    <button type='submit' name='__htmx_action' value='yourAction' class='uk-button uk-button-primary'>
+                        Trigger yourAction
+                    </button>
                 </div>
             </form>
         </div>";
