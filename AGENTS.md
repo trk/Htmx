@@ -41,10 +41,10 @@ These upstream v4 changes are implemented. Always use the NEW syntax in generate
 | N/A | `hx-config='{...}'` | Per-element JSON config |
 | N/A | `hx-validate` | Trigger native form validation on non-form triggers |
 | N/A | `hx-status:CODE="swap:S target:#foo"` | Per-status-code swap behavior |
-| `<div hx-swap-oob="...">` | `<hx-partial id="#foo" hx-swap="outerMorph">...</hx-partial>` | Partial element preferred; OOB still works |
+| `<div hx-swap-oob="...">` | `<hx-partial hx-target="#foo" hx-swap="outerMorph">...</hx-partial>` | Partial element preferred; OOB still works |
 | `HX-Trigger-Name` header | `HX-Source: "button#save-form"` (format `tagName#id`) | `triggerName()` falls back to POST for compat |
 | N/A | `HX-Request-Type: "partial" \| "full"` | Distinguishes hx-boost full docs from partials |
-| `HX-Trigger-After-Swap`, `HX-Trigger-After-Settle` | Deferred events inside single `HX-Trigger` via `swap:` / `settle:` keys | `pw-htmx-runtime.js` decodes and dispatches synthetic events |
+| `HX-Trigger-After-Swap`, `HX-Trigger-After-Settle` | Deferred events inside single `HX-Trigger` via `:swap` / `:settle` suffixes tunneled under `__pwHtmxAfterSwap` / `__pwHtmxAfterSettle` | `pw-htmx-runtime.js` decodes and dispatches synthetic events |
 | 4xx/5xx responses NOT swapped by default | 4xx/5xx ARE swapped by default | Use `hx-status:*` or `noSwap()` to opt out per-request |
 
 ## 0.2. Application Principles
@@ -98,7 +98,7 @@ This is the core server-side component model in this project:
 
 1. `new ComponentClass()` (constructor is internal, never override)
 2. `fill(array $props)` — only on first render, receives props from `renderComponent()`
-3. `hydrate()` — restores signed public properties from `__htmx_state` POST/GET payload; validates HMAC signature; hydrates ProcessWire object types from IDs; on GET/hx-boosted requests, restores state from query string `hx-state` parameter
+3. `hydrate()` — restores signed public properties from `hx__state` POST/GET payload; validates HMAC signature; hydrates ProcessWire object types from IDs; on GET/hx-boosted requests, restores state from query string `hx__state` parameter
 4. `executeAction()` — determines action from `__htmx_action` POST value or `<input name="__htmx_action">`; POST action methods run normal; GET `query*` methods run without CSRF
 5. `beforeRender()` — optional override; set custom views (`$this->view = ...`)
 6. `render()` — returns HTML string (main swap target); rendered via inline string, `.view.php` file, or `Ui` subclass
@@ -311,7 +311,8 @@ $r->isFullPage();                  // bool — requestType() === "full" (hx-boos
 $r->isPartial();                   // bool — requestType() === "partial" (normal hx-* request)
 
 // Target element info
-$r->target();                      // string|null — normalized CSS selector from HX-Target
+$r->target();                      // string|null — normalized element ID from HX-Target (e.g. "panel-1", without "#")
+$r->rawTarget();                   // string|null — raw HX-Target descriptor (e.g. "div#panel-1")
 $r->targetTag();                   // string|null — tag name only, e.g. "div", "form" (parsed from HX-Target)
 
 // HTMX v4 NEW: Source element info (HX-Source header — format "tagName#id", replaces old HX-Trigger-Name)
@@ -385,7 +386,7 @@ $frag = $this->htmx->fragment;
 
 // v4 PREFERRED: adds an <hx-partial> element (HTMX 4 partial elements)
 $frag->addPartial(
-    target: '#toast-container',             // id="..." attribute on <hx-partial>
+    target: '#toast-container',             // hx-target="..." attribute on <hx-partial>
     html:   '<div class="toast">Saved!</div>',
     swap:   'outerMorph',                   // hx-swap attribute (default: outerMorph)
     select: null,                           // optional hx-select within partial

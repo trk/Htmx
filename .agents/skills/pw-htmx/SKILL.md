@@ -61,7 +61,7 @@ This table is **non-negotiable**. If any code you generate falls in the "Old" co
 | N/A                                                         | `hx-config='{...}'` (JSON)                                                               | Per-element configuration (v4 NEW)                              |
 | N/A                                                         | `hx-validate`                                                                            | Native HTML5 validation trigger on non-form triggers (v4 NEW)   |
 | N/A                                                         | `hx-status:CODE="swap:S target:#foo"`                                                    | Per-status-code swap config (v4 NEW)                            |
-| `<div hx-swap-oob="...">`                                   | `<hx-partial id="#tgt" hx-swap="outerMorph">...</hx-partial>`                            | Partial elements preferred in v4 (via `Fragment::addPartial()`) |
+| `<div hx-swap-oob="...">`                                   | `<hx-partial hx-target="#tgt" hx-swap="outerMorph">...</hx-partial>`                     | Partial elements preferred in v4 (via `Fragment::addPartial()`) |
 | `HX-Trigger-Name` header                                    | `HX-Source: "button#save"` (format `tagName#id`)                                         | `Request::sourceTag()` + `rawSource()` parse this               |
 | N/A                                                         | `HX-Request-Type: "partial" \| "full"`                                                   | Distinguishes hx-boost full docs from partials (v4 NEW)         |
 | `HX-Trigger-After-Swap` / `HX-Trigger-After-Settle` headers | Deferred keys inside ONE `HX-Trigger` via `eventName:swap` / `eventName:settle` suffixes | Decoded by bundled `pw-htmx-runtime.js`                         |
@@ -225,7 +225,7 @@ This is the primary abstraction for stateful behavior in this project. Prefer it
 1. `new ComponentClass()` (internal, NEVER override `__construct()`)
 2. `fill(array $props)` — first render only, receives `renderComponent(Class::class, $props)` payload
 3. `mount()` — first render one-time init
-4. `hydrate()` — restores signed public properties from `__htmx_state` payload (POST/GET); validates HMAC; re-fetches ProcessWire object types from IDs; GET-boosted reads `hx-state` query param too
+4. `hydrate()` — restores signed public properties from `hx__state` payload (POST/GET); validates HMAC; re-fetches ProcessWire object types from IDs; GET-boosted reads `hx__state` query param too
 5. `executeAction()` — determines action from `__htmx_action` POST/GET field; POST mutations run normally; GET calls `query*` methods without CSRF requirement
 6. `beforeRender()` — optional override (set custom `$this->view`)
 7. `render()` — returns HTML string (main swap target); rendered via inline string, `.view.php` file, or `Ui` subclass
@@ -239,7 +239,8 @@ This is the primary abstraction for stateful behavior in this project. Prefer it
 $this->htmx->request->requestType();     // "full" | "partial" | null  (v4 NEW — HX-Request-Type)
 $this->htmx->request->isFullPage();      // requestType() === "full"
 $this->htmx->request->isPartial();       // requestType() === "partial"
-$this->htmx->request->target();          // "#panel-1"  (HX-Target)
+$this->htmx->request->target();          // "panel-1"  (normalized ID from HX-Target, without "#")
+$this->htmx->request->rawTarget();       // "div#panel-1"  (raw HX-Target descriptor)
 $this->htmx->request->targetTag();       // "div" | "form" | null  (v4 NEW tag-only parse)
 $this->htmx->request->rawSource();       // "button#btn-save" | "button"  (v4 NEW — HX-Source)
 $this->htmx->request->sourceTag();       // "button"  (v4 NEW tag-only from HX-Source)
@@ -265,7 +266,7 @@ $this->validationError(target: '#form', select: '#form-errors');
 
 // === Fragment API (Component or Ui): ===
 $this->htmx->fragment->addPartial(
-    target: '#toasts',                // id="<target>" on <hx-partial>
+    target: '#toasts',                // hx-target="<target>" on <hx-partial>
     html:   '<div id="toast-1">✔ Saved</div>',
     swap:   'outerMorph',             // default: outerMorph  (v4 preferred)
     select: null,                     // optional inner hx-select

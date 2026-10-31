@@ -118,8 +118,10 @@ When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is i
   - `X-PW-HTMX-Component`
   - `X-PW-HTMX-Action`
   - `X-PW-HTMX-Target`
+  - `X-PW-HTMX-Source`
   - `X-PW-HTMX-StateKey`
   - `X-PW-HTMX-OOB`
+  - `X-PW-HTMX-RequestType`
   - `X-PW-HTMX-Error-Code` (stable error identifiers)
   - `X-PW-HTMX-Exception` (exception class, no message redaction)
 
@@ -127,12 +129,15 @@ When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is i
 
 These values are designed to be stable and safe to expose in headers (no sensitive payload data):
 
-- `not_post` — endpoint called with a non-POST request
-- `missing_state` — missing `hx__state` (or `hx__state__{target}`) payload in POST
+- `missing_state` — missing `hx__state` (or `hx__state__{target}`) payload in request
 - `malformed_state` — state payload did not match the expected `{base64}|{hmac}` format
 - `bad_hmac` — HMAC signature did not match (tampering or wrong salt)
+- `state_expired` — state payload TTL expired (HTTP 419 Replay Protection)
+- `csrf_failed` — ProcessWire CSRF token validation failed on POST mutation (HTTP 403)
 - `invalid_state` — decoded state structure missing `__cmp` or invalid payload structure
+- `component_unregistered` — component class is not registered with the global endpoint
 - `invalid_component` — resolved component class missing or not a valid `Totoglu\Htmx\Component`
+- `missing_salt` — `$config->userAuthSalt` is missing or empty
 - `exception` — unhandled exception during hydrate/action/render
 
 ### Client Debug Toggle (Admin / Debug Only)
@@ -200,7 +205,7 @@ class LikeButton extends Component {
     /**
      * Optional: Hook executed upon initialization
      */
-    public function mount() {
+    public function mount(): void {
         if ($this->likes === 0) {
             $this->likes = $this->post->num_likes ?? 0;
         }
@@ -210,7 +215,7 @@ class LikeButton extends Component {
      * Action triggered from the frontend.
      * Dependencies (like $session) are Auto-Injected!
      */
-    public function like(int $step = 1, Session $session) {
+    public function like(Session $session, int $step = 1): void {
         $this->likes += $step;
 
         // Let's also save to the DB...
@@ -225,16 +230,16 @@ class LikeButton extends Component {
 
 ### 2. The Component View (`components/like-button.php`)
 
-Build the markup. You have full access to `$this` (the component context). HTMX 4 uses `hx-action` + `hx-method` syntax, with `__htmx_action` as the action trigger field name (NOT the old `hx__action`). `outerMorph` is the preferred swap style for v4.
+Build the markup. Inside external view files, `$component` references the `Component` instance and public properties (`$post`, `$likes`) are extracted directly into scope. HTMX 4 uses `hx-action` + `hx-method` syntax, with `__htmx_action` as the action trigger field name. `outerMorph` is the preferred swap style for v4.
 
 ```php
-<div id="<?= $this->id() ?>">
-    <form hx-action="<?= $this->requestUrl() ?>" hx-method="post" hx-target="#<?= $this->id() ?>" hx-swap="outerMorph" hx-disable="#<?= $this->id() ?> :input">
-        <h3><?= $this->post->title; ?></h3>
-        <p>Total Likes: <?= $this->likes; ?></p>
+<div id="<?= $component->id() ?>">
+    <form hx-action="<?= $component->requestUrl() ?>" hx-method="post" hx-target="#<?= $component->id() ?>" hx-swap="outerMorph" hx-disable="#<?= $component->id() ?> :input">
+        <h3><?= htmlspecialchars((string) $post->title, ENT_QUOTES, 'UTF-8') ?></h3>
+        <p>Total Likes: <?= (int) $likes ?></p>
 
         <!-- Secure State Payload (Required to maintain state) -->
-        <?= $this->renderStatePayload(); ?>
+        <?= $component->renderStatePayload() ?>
 
         <!-- Action Trigger (__htmx_action routes POST to the "like" method) -->
         <button class="uk-button" type="submit" name="__htmx_action" value="like">
@@ -347,7 +352,8 @@ if ($r->isHtmx()) {
     $isPartial   = $r->isPartial();     // standard hx-* partial request
 
     // Target element (HX-Target header)
-    $target    = $r->target();          // e.g. "#modal-content"
+    $target    = $r->target();          // e.g. "modal-content" (normalized ID without "#")
+    $rawTarget = $r->rawTarget();       // e.g. "div#modal-content"
     $targetTag = $r->targetTag();       // e.g. "div", "form" (tag name only)
 
     // === HTMX v4 NEW: Source Element (HX-Source replaces HX-Trigger-Name) ===
