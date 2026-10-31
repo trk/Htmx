@@ -10,46 +10,44 @@ use Htmx\Ui\Button;
 
 class ButtonTestUiView extends Ui
 {
-    public function render(): string
-    {
-        $payload = $this->renderState();
-        $clicks = $this->component ? $this->component->clicks : 0;
-        $url = $this->component ? $this->component->requestUrl() : '';
+	public function render(): string
+	{
+		$payload = $this->renderState();
+		$clicks = $this->component instanceof Test7Button ? $this->component->clicks : 0;
+		$url = $this->component ? $this->component->requestUrl() : '';
 
-        $btnLike = (new Button(['label' => 'Like', 'variant' => 'success']))->actionTrigger('like');
-        $btnReset = (new Button(['label' => 'Reset', 'variant' => 'danger']))->actionTrigger('reset');
+		$btnLike = (new Button(['label' => 'Like', 'variant' => 'success']))->actionTrigger('like');
+		$btnReset = (new Button(['label' => 'Reset', 'variant' => 'danger']))->actionTrigger('reset');
 
-        return "
-        <div class='uk-card uk-card-default uk-card-body' id='test7'>
-            <h3 class='uk-card-title'>Test 7: Custom Button Component</h3>
-            <p>Likes: <strong>{$clicks}</strong></p>
-            <form hx-action='{$url}' hx-method='post' hx-target='#test7' hx-swap='outerMorph'>
-                {$payload}
-                {$btnLike}
-                {$btnReset}
-            </form>
-        </div>";
-    }
+		return "
+		<div class='uk-card uk-card-default uk-card-body' id='test7'>
+			<h3 class='uk-card-title'>Test 7: Custom Button Component</h3>
+			<p>Likes: <strong>{$clicks}</strong></p>
+			<form hx-action='{$url}' hx-method='post' hx-target='#test7' hx-swap='outerMorph'>
+				{$payload}
+				{$btnLike}
+				{$btnReset}
+			</form>
+		</div>";
+	}
 }
 
 class Test7Button extends Component
 {
-    public int $clicks = 0;
+	public int $clicks = 0;
 
-    // initialize logic removed. Value starts at 0 automatically due to `public int $clicks = 0;`.
+	protected function beforeRender(): void
+	{
+		$this->view = new ButtonTestUiView();
+	}
 
-    protected function beforeRender(): void
-    {
-        $this->view = new ButtonTestUiView();
-    }
+	public function like(): void
+	{
+		$this->clicks++;
+	}
 
-    public function like(): void
-    {
-        $this->clicks++;
-    }
-
-    public function reset(): void
-    {
-        $this->clicks = 0;
-    }
+	public function reset(): void
+	{
+		$this->clicks = 0;
+	}
 }

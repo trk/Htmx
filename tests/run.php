@@ -18,6 +18,7 @@ use Htmx\Component\Test10Validation;
 $pageID = null;
 
 $htmx = wire('htmx');
+$pages = wire('pages');
 
 $output = "<div class='uk-container uk-margin-large-top uk-margin-large-bottom'>";
 $output .= "<h2>ProcessWire HTMX Experimental Test Suite</h2>";
@@ -28,16 +29,16 @@ $output .= "<div class='uk-child-width-1-2@m uk-grid-match' uk-grid>";
 $output .= "<div>" . $htmx->renderComponent(Test1ClickCounter::class) . "</div>";
 $output .= "<div>" . $htmx->renderComponent(Test2ClickCounterUi::class) . "</div>";
 
-$testPage = is_int($pageID) ? wire('pages')->get($pageID) : new NullPage();
+$testPage = is_int($pageID) ? $pages->get($pageID) : $pages->newNullPage();
 if ($testPage->id) {
-    $output .= "<div>" . $htmx->renderComponent(Test3Title::class, ['pageId' => $testPage->id]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test4Headline::class, ['pageId' => $testPage->id]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test5Summary::class, ['pageId' => $testPage->id]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test6Content::class, ['pageId' => $testPage->id]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test7Button::class) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test8MultiField::class, ['pageId' => $testPage->id]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test9Dependency::class, ['testPage' => $testPage]) . "</div>";
-    $output .= "<div>" . $htmx->renderComponent(Test10Validation::class) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test3Title::class, ['pageId' => $testPage->id]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test4Headline::class, ['pageId' => $testPage->id]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test5Summary::class, ['pageId' => $testPage->id]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test6Content::class, ['pageId' => $testPage->id]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test7Button::class) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test8MultiField::class, ['pageId' => $testPage->id]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test9Dependency::class, ['testPage' => $testPage]) . "</div>";
+	$output .= "<div>" . $htmx->renderComponent(Test10Validation::class) . "</div>";
 }
 
 $output .= "</div></div>";

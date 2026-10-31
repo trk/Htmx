@@ -8,33 +8,30 @@ use Totoglu\Htmx\Ui;
 
 class TestAmnesiacBadge extends Ui
 {
-    public array $defaultParams = [
-        'label' => 'Unknown',
-        'type' => 'info'
-    ];
+	public array $defaultParams = [
+		'label' => 'Unknown',
+		'type' => 'info'
+	];
 
-    public function render(): string
-    {
-        // Add core Tailwind utility classes
-        $this->attributes->addClass('px-3 py-1 text-xs font-semibold rounded-full border');
-        
-        $type = $this->parameters->getString('type');
-        if ($type === 'danger') {
-            $this->attributes->addClass('bg-red-100 text-red-800 border-red-200');
-        } elseif ($type === 'success') {
-            $this->attributes->addClass('bg-green-100 text-green-800 border-green-200');
-        } else {
-            $this->attributes->addClass('bg-blue-100 text-blue-800 border-blue-200');
-        }
-        
-        // Output label localized via translation function
-        $label = $this->parameters->getString('label');
-        if ($label === 'Unknown') {
-            $label = $this->__('Unknown Attribute');
-        }
-        $label = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
-        
-        // Render combined attribute bag safely
-        return "<span {$this->attributes->render()}>{$label}</span>";
-    }
+	public function render(): string
+	{
+		$this->attributes->addClass('px-3 py-1 text-xs font-semibold rounded-full border');
+
+		$type = $this->parameters->getString('type');
+		if ($type === 'danger') {
+			$this->attributes->addClass('bg-red-100 text-red-800 border-red-200');
+		} elseif ($type === 'success') {
+			$this->attributes->addClass('bg-green-100 text-green-800 border-green-200');
+		} else {
+			$this->attributes->addClass('bg-blue-100 text-blue-800 border-blue-200');
+		}
+
+		$label = $this->parameters->getString('label');
+		if ($label === 'Unknown') {
+			$label = $this->__('Unknown Attribute');
+		}
+		$label = htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+
+		return "<span {$this->attributes->render()}>{$label}</span>";
+	}
 }

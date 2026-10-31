@@ -9,34 +9,35 @@ use ProcessWire\Page;
 
 class Test9Dependency extends Component
 {
-    public ?Page $testPage = null;
-    public int $clicks = 0;
+	public ?Page $testPage = null;
+	public int $clicks = 0;
 
-    public function mount(): void
-    {
-        if ($this->testPage === null && $this->parameters->get('testPage') instanceof Page) {
-            $this->testPage = $this->parameters->get('testPage');
-        }
-    }
+	public function fill(array $props): self
+	{
+		if (isset($props['testPage']) && $props['testPage'] instanceof Page) {
+			$this->testPage = $props['testPage'];
+		}
+		return parent::fill($props);
+	}
 
-    public function ping(): void
-    {
-        $this->clicks++;
-    }
+	public function ping(): void
+	{
+		$this->clicks++;
+	}
 
-    public function render(): string
-    {
-        $title = $this->testPage ? htmlspecialchars((string) $this->testPage->title, ENT_QUOTES) : 'Unknown';
+	public function render(): string
+	{
+		$title = $this->testPage ? htmlspecialchars((string) $this->testPage->title, ENT_QUOTES, 'UTF-8') : 'Unknown';
 
-        return "
-        <div class='uk-card uk-card-default uk-card-body' id='test9'>
-            <h3 class='uk-card-title'>Test 9: Object Dependency</h3>
-            <p>Bound to Page: <strong>{$title}</strong></p>
-            <p>Pings: <strong>{$this->clicks}</strong></p>
-            <form hx-action='{$this->requestUrl()}' hx-method='post' hx-target='#test9' hx-swap='outerMorph'>
-                {$this->renderStatePayload()}
-                <button type='submit' name='__htmx_action' value='ping' class='uk-button uk-button-default'>Ping!</button>
-            </form>
-        </div>";
-    }
+		return "
+		<div class='uk-card uk-card-default uk-card-body' id='test9'>
+			<h3 class='uk-card-title'>Test 9: Object Dependency</h3>
+			<p>Bound to Page: <strong>{$title}</strong></p>
+			<p>Pings: <strong>{$this->clicks}</strong></p>
+			<form hx-action='{$this->requestUrl()}' hx-method='post' hx-target='#test9' hx-swap='outerMorph'>
+				{$this->renderStatePayload()}
+				<button type='submit' name='__htmx_action' value='ping' class='uk-button uk-button-default'>Ping!</button>
+			</form>
+		</div>";
+	}
 }
