@@ -21,7 +21,15 @@ document.addEventListener('htmx:config:request', function (evt) {
     }
   }
 
-  // Also look for the token inline in the DOM (<meta name="csrf-token"> etc)
+  // Also look for ProcessWire's standard hidden CSRF input (`input._post_token`) or meta tags
+  if (!tokenName || !tokenValue) {
+    var postTokenInput = document.querySelector('input._post_token[name][value]');
+    if (postTokenInput && postTokenInput.name && postTokenInput.value) {
+      tokenName = postTokenInput.name;
+      tokenValue = postTokenInput.value;
+    }
+  }
+
   if (!tokenName || !tokenValue) {
     var meta = document.querySelector('meta[name="csrf-token-name"]');
     var metaValue = document.querySelector('meta[name="csrf-token-value"]');
@@ -40,19 +48,21 @@ document.addEventListener('htmx:config:request', function (evt) {
     evt.detail.parameters[tokenName] = tokenValue;
   }
 
-  // 2) Mutate the fetch Request body if it's already a FormData
-  if (request.body instanceof FormData) {
+  // 2) Mutate the fetch Request body if it's already a FormData or URLSearchParams
+  if (request.body instanceof FormData || (typeof URLSearchParams !== 'undefined' && request.body instanceof URLSearchParams)) {
     try {
       request.body.set(tokenName, tokenValue);
     } catch (ignore) {}
   }
 
-  // 3) Set a header for servers that check X-Requested-With
+  // 3) Set X-Requested-With and ProcessWire's X-{tokenName} AJAX CSRF header
   if (request.headers && typeof request.headers.set === 'function') {
     try {
       request.headers.set('X-Requested-With', 'XMLHttpRequest');
+      request.headers.set('X-' + tokenName, tokenValue);
     } catch (ignore) {}
   } else if (request.headers && typeof request.headers === 'object') {
     request.headers['X-Requested-With'] = 'XMLHttpRequest';
+    request.headers['X-' + tokenName] = tokenValue;
   }
 });

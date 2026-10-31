@@ -314,8 +314,9 @@ abstract class Component extends WireData
 
 		$csrfHtml = '';
 		$session = $this->wire('session');
-		if ($session && isset($session->CSRF) && is_object($session->CSRF) && method_exists($session->CSRF, 'renderInput')) {
-			$csrfHtml = $session->CSRF->renderInput() . "\n";
+		$csrf = $session ? $session->CSRF : null;
+		if (is_object($csrf) && method_exists($csrf, 'renderInput')) {
+			$csrfHtml = $csrf->renderInput() . "\n";
 		}
 
 		return $csrfHtml . sprintf(

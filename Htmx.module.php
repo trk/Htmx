@@ -72,7 +72,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	{
 		return [
 			'title' => 'HTMX',
-			'version' => 200,
+			'version' => 201,
 			'summary' => 'HTMX v4 integration: native Request/Response API (HX-Request-Type, HX-Source, HX-Reselect, deferred triggers, <hx-partial>), state-aware Components, OOB swaps, Morph/TextContent swaps, and SSE/WS extensions.',
 			'href' => 'https://github.com/trk/Htmx',
 			'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -151,6 +151,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		}
 
 		if ($this->inAdmin()) {
+			$session = $this->wire('session');
+			$csrf = $session ? $session->CSRF : null;
+			if (is_object($csrf) && method_exists($csrf, 'getTokenName') && method_exists($csrf, 'getTokenValue')) {
+				$this->wire('config')->js('csrf', [
+					$csrf->getTokenName() => $csrf->getTokenValue(),
+				]);
+			}
+
 			foreach ($this->getAssetUrls() as $url) {
 				$this->wire('config')->scripts->add($url);
 			}
@@ -856,6 +864,95 @@ HTML;
 		$this->loadFrontendAssets = false;
 
 		return $scripts;
+	}
+
+	private bool $adminThemeInputfieldsReady = false;
+
+	/**
+	 * Ensures AdminThemeUikit InputfieldWrapper grid markup, classes, and column-width hooks
+	 * are active even when rendering Inputfields inside the stateless `/hx/req` endpoint.
+	 */
+	protected function ensureAdminThemeInputfieldsReady(): void
+	{
+		if ($this->adminThemeInputfieldsReady) {
+			return;
+		}
+		$this->adminThemeInputfieldsReady = true;
+
+		$config = $this->wire()->config;
+		$modules = $this->wire()->modules;
+		$page = $this->wire()->page;
+
+		if ($page && $page->template && $page->template->name === 'admin' && $config->get('InputfieldForm')) {
+			return;
+		}
+
+		$adminTheme = $this->wire('adminTheme');
+		if (!$adminTheme && $modules && $modules->isInstalled('AdminThemeUikit')) {
+			$adminTheme = $modules->get('AdminThemeUikit');
+			if ($adminTheme) {
+				$this->wire('adminTheme', $adminTheme);
+			}
+		}
+
+		if ($adminTheme && method_exists($adminTheme, 'hookBeforeRenderInputfield')) {
+			$initFile = $config->paths('AdminThemeUikit') . 'init.php';
+			if ($initFile && is_file($initFile) && !$config->get('InputfieldForm')) {
+				$wire = $this->wire();
+				$input = $this->wire()->input;
+				include_once $initFile;
+			}
+			$this->wire()->addHookBefore('Inputfield::render', $adminTheme, 'hookBeforeRenderInputfield');
+			$this->wire()->addHookBefore('Inputfield::renderValue', $adminTheme, 'hookBeforeRenderInputfield');
+		}
+	}
+
+	/**
+	 * Render an InputfieldWrapper as an HTMX fragment while capturing and synchronizing
+	 * newly added ProcessWire.config JS settings, scripts, and stylesheets.
+	 *
+	 * @param \ProcessWire\InputfieldWrapper $wrapper
+	 * @param bool $renderValueMode
+	 * @return string
+	 */
+	public function renderInputfieldsFragment(\ProcessWire\InputfieldWrapper $wrapper, bool $renderValueMode = false): string
+	{
+		$this->ensureAdminThemeInputfieldsReady();
+
+		/** @var Config $config */
+		$config = $this->wire()->config;
+
+		$beforeScripts = $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
+		$beforeStyles = $config->styles ? array_values(iterator_to_array($config->styles)) : [];
+		$beforeJs = is_array($config->js()) ? $config->js() : [];
+
+		$wrapper->renderReady(null, $renderValueMode);
+		foreach ($wrapper->getAll() as $inputfield) {
+			$inputfield->renderReady($wrapper, $renderValueMode);
+		}
+
+		$html = $renderValueMode ? $wrapper->renderValue() : $wrapper->render();
+
+		$afterScripts = $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
+		$afterStyles = $config->styles ? array_values(iterator_to_array($config->styles)) : [];
+		$afterJs = is_array($config->js()) ? $config->js() : [];
+
+		$newScripts = array_values(array_diff($afterScripts, $beforeScripts));
+		$newStyles = array_values(array_diff($afterStyles, $beforeStyles));
+
+		$payload = [
+			'jsConfig' => $afterJs,
+			'newJsConfig' => array_diff_key($afterJs, $beforeJs),
+			'scripts' => $newScripts,
+			'styles' => $newStyles,
+		];
+
+		$json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+		if (is_string($json) && $json !== '') {
+			$html .= "\n<script type=\"application/json\" data-pw-htmx-config>{$json}</script>";
+		}
+
+		return $html;
 	}
 
 	protected function getAssetUrls(): array
