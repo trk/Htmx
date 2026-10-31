@@ -22,7 +22,7 @@ use Totoglu\Htmx\Debug\HtmxTracyPanel;
  * @property bool   $loadHyperscript     Load _hyperscript library?
  * @property bool   $autoFlashMessages   Auto trigger flash messages?
  * @property bool   $autoExtractTargets  Auto extract targets using DOM?
- * @property array  $extensions          Extensions to load (ws, sse, loading, etc)
+ * @property array  $extensions          Extensions to load (hx-ws, hx-sse, hx-preload, etc)
  * @property string $endpointUrl         URL hook endpoint for state components (default: /hx/req)
  *
  * @author Iskender TOTOGLU, @ukyo (community), @trk (GitHub)
@@ -30,14 +30,11 @@ use Totoglu\Htmx\Debug\HtmxTracyPanel;
  */
 class Htmx extends WireData implements Module, ConfigurableModule
 {
-	/** @var Request */
-	public $request;
+	public Request $request;
 
-	/** @var Response */
-	public $response;
+	public Response $response;
 
-	/** @var Fragment */
-	public $fragment;
+	public Fragment $fragment;
 
 	/** @var array<string, string> component alias map */
 	protected array $components = [];
@@ -49,26 +46,25 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	private array $registeredAliases = [];
 
 	/**
-	 * Resolve HMAC salt defensively from ProcessWire config.
-	 */
-	private function getHmacSalt(): string
-	{
-		$config = $this->wire('config');
-		if ($config === null || !isset($config->userAuthSalt) || !is_string($config->userAuthSalt) || $config->userAuthSalt === '') {
-			throw new \ProcessWire\WireException(
-				"HTMX HMAC Salt Missing: config->userAuthSalt must be a non-empty string for Htmx module state signing."
-			);
-		}
-		return $config->userAuthSalt;
-	}
-
-	/**
 	 * Internal debug info for Tracy panel / response headers (per request).
 	 * @var array<string, mixed>
 	 */
 	protected array $tracyDebug = [];
 
-	public static function getModuleInfo()
+	private bool $adminThemeInputfieldsReady = false;
+
+	/**
+	 * Resolve HMAC salt defensively from ProcessWire config.
+	 */
+	private function getHmacSalt(): string
+	{
+		return Component::resolveHmacSalt($this->wire()->config);
+	}
+
+	/**
+	 * @return array<string, mixed>
+	 */
+	public static function getModuleInfo(): array
 	{
 		return [
 			'title' => 'HTMX',
@@ -90,7 +86,11 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 	public function __construct()
 	{
-		$this->wire('classLoader')->addNamespace('Totoglu\Htmx', __DIR__ . '/src/');
+		parent::__construct();
+		$classLoader = $this->wire()->classLoader;
+		if ($classLoader) {
+			$classLoader->addNamespace('Totoglu\Htmx', __DIR__ . '/src/');
+		}
 
 		$this->set('loadFrontendAssets', true);
 		$this->set('loadHyperscript', false);
@@ -108,31 +108,37 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		$this->set('tracySupport', true);
 	}
 
-	public function wired()
+	public function wired(): void
 	{
 		$this->wire('htmx', $this);
 	}
 
-	public function init()
+	public function init(): void
 	{
 		$this->request = new Request();
 		$this->response = new Response();
 		$this->fragment = new Fragment();
 
-		$sitePath = $this->wire('config')->paths->site;
+		$config = $this->wire()->config;
+		$classLoader = $this->wire()->classLoader;
+		$sitePath = $config->paths->site;
 
-		$componentsDir = trim($this->componentsPath ?: 'components/', '/');
-		$uiDir = trim($this->uiPath ?: 'ui/', '/');
+		$componentsDir = trim((string) ($this->componentsPath ?: 'components/'), '/');
+		$uiDir = trim((string) ($this->uiPath ?: 'ui/'), '/');
 
 		if (is_dir($sitePath . $componentsDir . '/')) {
-			$this->wire('classLoader')->addNamespace('Htmx\Component', $sitePath . $componentsDir . '/');
+			if ($classLoader) {
+				$classLoader->addNamespace('Htmx\Component', $sitePath . $componentsDir . '/');
+			}
 			if ($this->allowComponentPaths) {
 				$this->allowedComponentPaths[] = $sitePath . $componentsDir . '/';
 			}
 		}
 
 		if (is_dir($sitePath . $uiDir . '/')) {
-			$this->wire('classLoader')->addNamespace('Htmx\Ui', $sitePath . $uiDir . '/');
+			if ($classLoader) {
+				$classLoader->addNamespace('Htmx\Ui', $sitePath . $uiDir . '/');
+			}
 			if ($this->allowComponentPaths) {
 				$this->allowedComponentPaths[] = $sitePath . $uiDir . '/';
 			}
@@ -140,54 +146,56 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 		$this->discoverModuleComponents();
 
-		$this->wire()->config->htmx = $this->request->isHtmx() || $this->request->isBoosted();
+		$config->htmx = $this->request->isHtmx() || $this->request->isBoosted();
 	}
 
-	public function ready()
+	public function ready(): void
 	{
 		if ($this->isTracySupportEnabled()) {
 			$this->primeTracyDebugContext();
 			$this->registerTracyPanel();
 		}
 
+		$config = $this->wire()->config;
+
 		if ($this->inAdmin()) {
-			$session = $this->wire('session');
+			$session = $this->wire()->session;
 			$csrf = $session ? $session->CSRF : null;
 			if (is_object($csrf) && method_exists($csrf, 'getTokenName') && method_exists($csrf, 'getTokenValue')) {
-				$this->wire('config')->js('csrf', [
+				$config->js('csrf', [
 					$csrf->getTokenName() => $csrf->getTokenValue(),
 				]);
 			}
 
 			foreach ($this->getAssetUrls() as $url) {
-				$this->wire('config')->scripts->add($url);
+				$config->scripts->add($url);
 			}
 
 			foreach ($this->getAdminHelperAssetUrls() as $url) {
-				$this->wire('config')->scripts->add($url);
+				$config->scripts->add($url);
 			}
 		}
 
-		$this->endpointUrl = '/' . ltrim($this->endpointUrl ?: '/hx/req', '/');
+		$this->endpointUrl = '/' . ltrim((string) ($this->endpointUrl ?: '/hx/req'), '/');
 		if ($this->request->isHtmx() || $this->request->isBoosted()) {
 			$this->wire()->addHook($this->endpointUrl, $this, 'handleEndpoint');
 		}
 
-		$this->wire()->addHookAfter('Modules::refresh', function () {
-			$cache = $this->wire('cache');
+		$this->wire()->addHookAfter('Modules::refresh', function (): void {
+			$cache = $this->wire()->cache;
 			if ($cache) {
 				$cache->delete('htmx.module-components');
 			}
 		});
 
-		$this->wire()->addHookAfter('Page::render', function (HookEvent $e) {
+		$this->wire()->addHookAfter('Page::render', function (HookEvent $e): void {
 			$e->replace = true;
-			$html = $e->return;
+			$html = (string) $e->return;
 
 			// 1. Target Auto-Extraction (Partial Render)
 			if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
 				$targetId = $this->request->target();
-				if ($targetId && preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $targetId) && strpos($html, 'id="' . $targetId . '"') !== false) {
+				if ($targetId && preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $targetId) && str_contains($html, 'id="' . $targetId . '"')) {
 					try {
 						libxml_use_internal_errors(true);
 						$dom = new \DOMDocument();
@@ -197,13 +205,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
 							$safeId = htmlspecialchars($targetId, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 							$nodes = $xpath->query("//*[@id=\"{$safeId}\"]");
 							if ($nodes && $nodes->length > 0) {
-								$html = html_entity_decode($dom->saveHTML($nodes->item(0)));
+								$html = html_entity_decode((string) $dom->saveHTML($nodes->item(0)));
 							}
 						}
 						libxml_clear_errors();
-					} catch (\Throwable $e) {
-						if ($this->wire('config')->debug) {
-							$this->wire('log')->error("HTMX autoExtractTargets DOM parser failed: " . $e->getMessage());
+					} catch (\Throwable $ex) {
+						$cfg = $this->wire()->config;
+						if ($cfg && $cfg->debug) {
+							$this->wire()->log->error('HTMX autoExtractTargets DOM parser failed: ' . $ex->getMessage());
 						}
 					}
 				}
@@ -211,14 +220,14 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 			// 2. Inject OOB swaps + <hx-partial> entries if any accumulated
 			$oob = $this->fragment->getOobSwaps();
-			if (!empty($oob) && $this->request->isHtmx() && !$this->request->isBoosted()) {
+			if ($oob !== '' && $this->request->isHtmx() && !$this->request->isBoosted()) {
 				$html .= "\n" . $oob;
 			}
 
 			// 3. Load Frontend Assets + Lifecycle Bridge
 			$isFullRender = !$this->request->isHtmx() || $this->request->isBoosted() || $this->request->isHistoryRestore();
-			if ($isFullRender && $this->lifecycleBridge && strpos($html, '</head>') !== false && strpos($html, 'window.__pwHtmxBridgeLoaded') === false) {
-				$prefix = $this->wire('sanitizer')->name((string) $this->lifecycleEventPrefix);
+			if ($isFullRender && $this->lifecycleBridge && str_contains($html, '</head>') && !str_contains($html, 'window.__pwHtmxBridgeLoaded')) {
+				$prefix = $this->wire()->sanitizer->name((string) $this->lifecycleEventPrefix);
 				if ($prefix === '') {
 					$prefix = 'pw-htmx';
 				}
@@ -250,83 +259,34 @@ function pwHtmxEmit(name, detail) {
   }
 }
 // HTMX v4 colon-format lifecycle events
-document.addEventListener('htmx:before:request', function(evt){ pwHtmxEmit('beforeRequest', evt.detail); });
-document.addEventListener('htmx:after:request',  function(evt){ pwHtmxEmit('afterRequest',  evt.detail); });
-document.addEventListener('htmx:before:swap',    function(evt){ pwHtmxEmit('beforeSwap',    evt.detail); });
-document.addEventListener('htmx:after:swap',     function(evt){ pwHtmxEmit('afterSwap',     evt.detail); });
-document.addEventListener('htmx:after:settle',   function(evt){ pwHtmxEmit('afterSettle',   evt.detail); });
-document.addEventListener('htmx:config:request', function(evt){ pwHtmxEmit('configRequest', evt.detail); });
-document.addEventListener('htmx:response:error', function(evt){ pwHtmxEmit('responseError', evt.detail); });
-document.addEventListener('htmx:history:restore',function(evt){ pwHtmxEmit('historyRestore',evt.detail); });
+document.addEventListener('htmx:before:request',        function(evt){ pwHtmxEmit('beforeRequest',  evt.detail); });
+document.addEventListener('htmx:after:request',         function(evt){ pwHtmxEmit('afterRequest',   evt.detail); });
+document.addEventListener('htmx:before:swap',           function(evt){ pwHtmxEmit('beforeSwap',     evt.detail); });
+document.addEventListener('htmx:after:swap',            function(evt){ pwHtmxEmit('afterSwap',      evt.detail); });
+document.addEventListener('htmx:after:settle',          function(evt){ pwHtmxEmit('afterSettle',    evt.detail); });
+document.addEventListener('htmx:config:request',        function(evt){ pwHtmxEmit('configRequest',  evt.detail); });
+document.addEventListener('htmx:response:error',        function(evt){ pwHtmxEmit('responseError',  evt.detail); });
+document.addEventListener('htmx:before:history:restore',function(evt){ pwHtmxEmit('historyRestore', evt.detail); });
 </script>
 HTML;
 				$html = str_replace('</head>', "{$bridge}\n</head>", $html);
 			}
 
-			if (!$this->inAdmin() && $this->loadFrontendAssets) {
-				if ($isFullRender) {
-					$scripts = "";
-					foreach ($this->getAssetUrls() as $url) {
-						$scripts .= "\n<script src=\"{$url}\"></script>";
-					}
+			if (!$this->inAdmin() && $this->loadFrontendAssets && $isFullRender) {
+				$scripts = '';
+				foreach ($this->getAssetUrls() as $url) {
+					$scripts .= "\n<script src=\"{$url}\"></script>";
+				}
+				$scripts .= "\n" . $this->buildCsrfConfigScript();
 
-					// HTMX v4: ctx.request (fetch Request object) not ctx.xhr
-					$csrfName = $this->wire('session')->CSRF->getTokenName();
-					$csrfValue = $this->wire('session')->CSRF->getTokenValue();
-					$scripts .= <<<HTML
-
-<script>
-document.addEventListener('htmx:config:request', function(evt) {
-    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
-    var request = ctx && ctx.request ? ctx.request : null;
-    if (!request || !request.method || request.method.toLowerCase() === "get") {
-        return;
-    }
-    // HTMX v4: request.body might be a FormData or plain object depending on phase.
-    // htmx provides evt.detail.parameters too for simple key injection.
-    if (evt.detail && evt.detail.parameters && typeof evt.detail.parameters === 'object') {
-        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
-    }
-    if (request && request.body instanceof FormData) {
-        request.body.set('{$csrfName}', '{$csrfValue}');
-    }
-    if (request && request.headers && typeof request.headers.set === 'function') {
-        request.headers.set('X-Requested-With', 'XMLHttpRequest');
-    } else if (request && request.headers && typeof request.headers === 'object') {
-        request.headers['X-Requested-With'] = 'XMLHttpRequest';
-    }
-});
-</script>
-HTML;
-
-					if (strpos($html, '</head>') !== false) {
-						$html = str_replace('</head>', "{$scripts}\n</head>", $html);
-					}
+				if (str_contains($html, '</head>')) {
+					$html = str_replace('</head>', "{$scripts}\n</head>", $html);
 				}
 			}
 
 			// 4. Auto Flash Messages (deferred afterSwap event)
 			if ($this->autoFlashMessages && ($this->request->isHtmx() || $this->request->isBoosted())) {
-				$flash = [];
-				try {
-					$notices = $this->wire('notices');
-					if ($notices && is_iterable($notices)) {
-						foreach ($notices as $n) {
-							$type = 'message';
-							if (strpos(get_class($n), 'Error') !== false) $type = 'error';
-							elseif (strpos(get_class($n), 'Warning') !== false) $type = 'warning';
-							$flash[] = ['type' => $type, 'text' => $n->text];
-						}
-						if (method_exists($notices, 'removeAll')) {
-							$notices->removeAll();
-						}
-					}
-				} catch (\Throwable $e) {
-				}
-
-				if (!empty($flash)) {
-					$this->response->triggerAfterSwap('pw-messages', $flash);
-				}
+				$this->collectFlashMessages();
 			}
 
 			// 5. Flush deferred HTMX v4 response headers (HX-Trigger, HX-Reselect, HX-Retarget, HX-Reswap, etc)
@@ -341,49 +301,93 @@ HTML;
 	}
 
 	/**
+	 * Build inline CSRF configuration script for frontend HTMX v4 requests.
+	 */
+	protected function buildCsrfConfigScript(): string
+	{
+		$session = $this->wire()->session;
+		$csrf = $session ? $session->CSRF : null;
+		if (!is_object($csrf) || !method_exists($csrf, 'getTokenName') || !method_exists($csrf, 'getTokenValue')) {
+			return '';
+		}
+
+		$csrfName = (string) $csrf->getTokenName();
+		$csrfValue = (string) $csrf->getTokenValue();
+
+		return <<<HTML
+<script>
+document.addEventListener('htmx:config:request', function(evt) {
+    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
+    var request = ctx && ctx.request ? ctx.request : null;
+    if (!request || !request.method || request.method.toLowerCase() === "get") {
+        return;
+    }
+    if (request.body instanceof FormData || (typeof URLSearchParams !== 'undefined' && request.body instanceof URLSearchParams)) {
+        request.body.set('{$csrfName}', '{$csrfValue}');
+    }
+    if (request.headers && typeof request.headers.set === 'function') {
+        request.headers.set('X-Requested-With', 'XMLHttpRequest');
+        request.headers.set('X-{$csrfName}', '{$csrfValue}');
+    } else if (request.headers && typeof request.headers === 'object') {
+        request.headers['X-Requested-With'] = 'XMLHttpRequest';
+        request.headers['X-{$csrfName}'] = '{$csrfValue}';
+    }
+});
+</script>
+HTML;
+	}
+
+	/**
+	 * Collect ProcessWire notices and queue them as a deferred afterSwap `pw-messages` trigger.
+	 */
+	protected function collectFlashMessages(): void
+	{
+		$flash = [];
+		try {
+			$notices = $this->wire()->notices;
+			if ($notices && is_iterable($notices)) {
+				foreach ($notices as $n) {
+					$type = 'message';
+					$className = get_class($n);
+					if (str_contains($className, 'Error')) {
+						$type = 'error';
+					} elseif (str_contains($className, 'Warning')) {
+						$type = 'warning';
+					}
+					$flash[] = ['type' => $type, 'text' => $n->text];
+				}
+				if (method_exists($notices, 'removeAll')) {
+					$notices->removeAll();
+				}
+			}
+		} catch (\Throwable) {
+		}
+
+		if ($flash !== []) {
+			$this->response->triggerAfterSwap('pw-messages', $flash);
+		}
+	}
+
+	/**
 	 * Handle the stateless component POST / GET-QUERY request endpoint.
 	 *
 	 * HTMX v4: POST for mutations, GET with `query*` action names for read-only operations.
 	 */
-	public function handleEndpoint(\ProcessWire\HookEvent $e)
+	public function handleEndpoint(HookEvent $e): string
 	{
-		$input = $this->wire('input');
+		$input = $this->wire()->input;
+		$log = $this->wire()->log;
+
 		if ($input === null) {
 			$this->tracyDebug['errorCode'] = 'no_input';
 			$this->sendTracyHeaders();
-			http_response_code(500);
-			return "Internal Server Error";
+			if (!headers_sent()) {
+				http_response_code(500);
+			}
+			return 'Internal Server Error';
 		}
 
-		$this->tracyDebug = [
-			'reqId' => $this->tracyDebug['reqId'] ?? null,
-			'isHtmx' => (bool) $this->request->isHtmx(),
-			'isBoosted' => (bool) $this->request->isBoosted(),
-			'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
-			'isFullPage' => (bool) $this->request->isFullPage(),
-			'isPartial' => (bool) $this->request->isPartial(),
-			'endpointUrl' => (string) $this->endpointUrl,
-			'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
-			'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
-			'target' => $this->request ? $this->request->rawTarget() : null,
-			'targetTag' => $this->request ? $this->request->targetTag() : null,
-			'source' => $this->request ? $this->request->rawSource() : null,
-			'sourceTag' => $this->request ? $this->request->sourceTag() : null,
-			'triggerName' => $this->request ? $this->request->triggerName() : null,
-			'prompt' => $this->request ? $this->request->prompt() : null,
-			'currentUrl' => $this->request ? $this->request->currentUrl() : null,
-			'requestType' => $this->request ? $this->request->requestType() : null,
-			'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
-			'getKeys' => is_array($_GET ?? null) ? array_keys($_GET) : [],
-			'component' => null,
-			'action' => $input->post('hx__action') ?: $input->get('hx__action'),
-			'stateKey' => null,
-			'oobCount' => null,
-			'errorCode' => null,
-			'exceptionClass' => null,
-			'timingMs' => null,
-		];
-		$this->primeTracyDebugContext();
+		$this->primeTracyDebugContext(true);
 
 		$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 		$isPost = ($method === 'POST');
@@ -391,7 +395,7 @@ HTML;
 		// Prefer POST payload, then GET query (HTMX v4 hx-query / QUERY actions)
 		$payload = null;
 		$payloadKey = 'hx__state';
-		$target = $this->request ? $this->request->target() : null;
+		$target = $this->request->target();
 		if ($target) {
 			$key = 'hx__state__' . $target;
 			$payload = $isPost ? $input->post($key) : $input->get($key);
@@ -407,60 +411,91 @@ HTML;
 			$first = reset($payload);
 			$payload = is_string($first) ? $first : '';
 		}
-		if (!$payload) {
-			$this->wire('log')->error("HTMX Endpoint Failed: Missing hx__state in request data.");
+		if (!is_string($payload) || $payload === '') {
+			if ($log) {
+				$log->error('HTMX Endpoint Failed: Missing hx__state in request data.');
+			}
 			$this->tracyDebug['errorCode'] = 'missing_state';
 			$this->tracyDebug['stateKey'] = $payloadKey;
 			$this->sendTracyHeaders();
 			$this->response->applyHeaders();
-			http_response_code(400);
-			return "Bad Request: Missing HTMX State Payload.";
+			if (!headers_sent()) {
+				http_response_code(400);
+			}
+			return 'Bad Request: Missing HTMX State Payload.';
 		}
 
-		$parts = explode('|', $payload, 2);
-		if (count($parts) !== 2) {
-			$this->wire('log')->error("HTMX Endpoint Failed: Malformed payload. Parts count: " . count($parts));
-			$this->tracyDebug['errorCode'] = 'malformed_state';
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			http_response_code(400);
-			return "Bad Request: Malformed HTMX State Payload.";
-		}
-
-		list($encoded, $hash) = $parts;
 		try {
 			$salt = $this->getHmacSalt();
-		} catch (\Throwable $e) {
-			$this->wire('log')->error("HTMX Endpoint Failed: " . $e->getMessage());
+		} catch (\Throwable $ex) {
+			if ($log) {
+				$log->error('HTMX Endpoint Failed: ' . $ex->getMessage());
+			}
 			$this->tracyDebug['errorCode'] = 'missing_salt';
 			$this->tracyDebug['stateKey'] = $payloadKey;
 			$this->sendTracyHeaders();
 			$this->response->applyHeaders();
-			http_response_code(500);
-			return "Internal Server Error: Module crypto configuration missing.";
-		}
-		$expectedHash = hash_hmac('sha256', $encoded, $salt);
-		if (!hash_equals($expectedHash, $hash)) {
-			$this->wire('log')->error("HTMX Endpoint Failed: Invalid HMAC signature.");
-			$this->tracyDebug['errorCode'] = 'bad_hmac';
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			http_response_code(403);
-			return "Forbidden: Invalid HTMX State Signature.";
+			if (!headers_sent()) {
+				http_response_code(500);
+			}
+			return 'Internal Server Error: Module crypto configuration missing.';
 		}
 
-		$decodedJson = base64_decode($encoded, true);
-		$decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
-		if (!is_array($decoded) || empty($decoded['__cmp']) || !is_string($decoded['__cmp'])) {
-			$this->wire('log')->error("HTMX Endpoint Failed: Invalid State Structure or missing __cmp.");
+		try {
+			$decoded = Component::decodeSignedPayload($payload, $salt);
+		} catch (WireException $ex) {
+			$msg = $ex->getMessage();
+			if ($log) {
+				$log->error('HTMX Endpoint Failed: ' . $msg);
+			}
+			$this->tracyDebug['stateKey'] = $payloadKey;
+			$code = $ex->getCode();
+
+			if ($code === Component::ERR_BAD_HMAC) {
+				$this->tracyDebug['errorCode'] = 'bad_hmac';
+				$this->sendTracyHeaders();
+				$this->response->applyHeaders();
+				if (!headers_sent()) {
+					http_response_code(403);
+				}
+				return 'Forbidden: Invalid HTMX State Signature.';
+			}
+
+			if ($code === Component::ERR_STATE_EXPIRED) {
+				$this->tracyDebug['errorCode'] = 'state_expired';
+				$this->sendTracyHeaders();
+				$this->response->applyHeaders();
+				if (!headers_sent()) {
+					http_response_code(419);
+				}
+				return 'Page Expired: HTMX State Payload Expired.';
+			}
+
+			$this->tracyDebug['errorCode'] = ($code === Component::ERR_MALFORMED_STATE)
+				? 'malformed_state'
+				: 'invalid_state';
+			$this->sendTracyHeaders();
+			$this->response->applyHeaders();
+			if (!headers_sent()) {
+				http_response_code(400);
+			}
+			return $this->tracyDebug['errorCode'] === 'malformed_state'
+				? 'Bad Request: Malformed HTMX State Payload.'
+				: 'Bad Request: Invalid State Structure.';
+		}
+
+		if (empty($decoded['__cmp']) || !is_string($decoded['__cmp'])) {
+			if ($log) {
+				$log->error('HTMX Endpoint Failed: Invalid State Structure or missing __cmp.');
+			}
 			$this->tracyDebug['errorCode'] = 'invalid_state';
 			$this->tracyDebug['stateKey'] = $payloadKey;
 			$this->sendTracyHeaders();
 			$this->response->applyHeaders();
-			http_response_code(400);
-			return "Bad Request: Invalid State Structure.";
+			if (!headers_sent()) {
+				http_response_code(400);
+			}
+			return 'Bad Request: Invalid State Structure.';
 		}
 
 		$class = $decoded['__cmp'];
@@ -471,26 +506,34 @@ HTML;
 		} else {
 			$knownFullNames = array_flip(array_values($this->components));
 			if (!isset($knownFullNames[$class])) {
-				$this->wire('log')->error("HTMX Endpoint Failed: Component not registered with global endpoint. Class: " . $class);
+				if ($log) {
+					$log->error('HTMX Endpoint Failed: Component not registered with global endpoint. Class: ' . $class);
+				}
 				$this->tracyDebug['errorCode'] = 'component_unregistered';
 				$this->tracyDebug['component'] = $class;
 				$this->tracyDebug['stateKey'] = $payloadKey;
 				$this->sendTracyHeaders();
 				$this->response->applyHeaders();
-				http_response_code(400);
-				return "Bad Request: Component not registered for the global HTMX endpoint.";
+				if (!headers_sent()) {
+					http_response_code(400);
+				}
+				return 'Bad Request: Component not registered for the global HTMX endpoint.';
 			}
 		}
 
 		if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
-			$this->wire('log')->error("HTMX Endpoint Failed: Invalid Component Class. Class: " . $class);
+			if ($log) {
+				$log->error('HTMX Endpoint Failed: Invalid Component Class. Class: ' . $class);
+			}
 			$this->tracyDebug['errorCode'] = 'invalid_component';
 			$this->tracyDebug['component'] = $class;
 			$this->tracyDebug['stateKey'] = $payloadKey;
 			$this->sendTracyHeaders();
 			$this->response->applyHeaders();
-			http_response_code(400);
-			return "Bad Request: Invalid Component Class.";
+			if (!headers_sent()) {
+				http_response_code(400);
+			}
+			return 'Bad Request: Invalid Component Class.';
 		}
 
 		try {
@@ -502,11 +545,12 @@ HTML;
 			$this->tracyDebug['component'] = $class;
 			$this->tracyDebug['stateKey'] = $payloadKey;
 
-			if ($payloadKey !== 'hx__state' && method_exists($cmp, 'setStateKey')) {
+			if ($payloadKey !== 'hx__state') {
 				$cmp->setStateKey($payloadKey);
 			}
 
 			$tHydrate = microtime(true);
+			$cmp->setPreDecodedState($decoded);
 			$cmp->hydrate();
 			$tAfterHydrate = microtime(true);
 
@@ -520,13 +564,13 @@ HTML;
 
 			// 1. Inject accumulated OOB swaps + <hx-partial>
 			$oob = $this->fragment->getOobSwaps();
-			if (!empty($oob)) {
+			if ($oob !== '') {
 				$html .= "\n" . $oob;
 			}
-			if ($oob === '' || $oob === null) {
+			if ($oob === '') {
 				$oobCount = 0;
 			} else {
-				$oobSplit = preg_split('/\R+/', trim((string) $oob), -1, PREG_SPLIT_NO_EMPTY);
+				$oobSplit = preg_split('/\R+/', trim($oob), -1, PREG_SPLIT_NO_EMPTY);
 				$oobCount = is_array($oobSplit) ? count($oobSplit) : 1;
 			}
 			$this->tracyDebug['oobCount'] = $oobCount;
@@ -539,26 +583,7 @@ HTML;
 
 			// 2. Process Auto Flash Messages (deferred afterSwap)
 			if ($this->autoFlashMessages) {
-				$flash = [];
-				try {
-					$notices = $this->wire('notices');
-					if ($notices && is_iterable($notices)) {
-						foreach ($notices as $n) {
-							$type = 'message';
-							if (strpos(get_class($n), 'Error') !== false) $type = 'error';
-							elseif (strpos(get_class($n), 'Warning') !== false) $type = 'warning';
-							$flash[] = ['type' => $type, 'text' => $n->text];
-						}
-						if (method_exists($notices, 'removeAll')) {
-							$notices->removeAll();
-						}
-					}
-				} catch (\Throwable $ex) {
-				}
-
-				if (!empty($flash)) {
-					$this->response->triggerAfterSwap('pw-messages', $flash);
-				}
+				$this->collectFlashMessages();
 			}
 
 			// 3. Flush HTMX v4 headers (single HX-Trigger with deferred swap/settle blocks)
@@ -566,40 +591,65 @@ HTML;
 			$this->sendTracyHeaders();
 
 			return $html;
+		} catch (WireCSRFException $csrfEx) {
+			if ($log) {
+				$log->error('HTMX Endpoint CSRF Failed: ' . $csrfEx->getMessage());
+			}
+			$this->tracyDebug['errorCode'] = 'csrf_failed';
+			$this->tracyDebug['exceptionClass'] = get_class($csrfEx);
+			$this->response->applyHeaders();
+			$this->sendTracyHeaders($csrfEx);
+			if (!headers_sent()) {
+				http_response_code(403);
+			}
+			return 'Forbidden: CSRF Token Validation Failed.';
 		} catch (\Throwable $ex) {
-			$this->wire('log')->error("HTMX Endpoint Crash: " . $ex->getMessage() . " in " . $ex->getFile() . ":" . $ex->getLine() . "\nTrace: " . $ex->getTraceAsString());
+			if ($log) {
+				$log->error('HTMX Endpoint Crash: ' . $ex->getMessage() . ' in ' . $ex->getFile() . ':' . $ex->getLine() . "\nTrace: " . $ex->getTraceAsString());
+			}
 			$this->tracyDebug['errorCode'] = 'exception';
 			$this->tracyDebug['exceptionClass'] = get_class($ex);
 
 			if ($this->isTracySupportEnabled() && class_exists(\Tracy\Debugger::class)) {
 				try {
 					\Tracy\Debugger::log($ex);
-				} catch (\Throwable $ignore) {
+				} catch (\Throwable) {
 				}
 			}
 
 			$this->response->applyHeaders();
 			$this->sendTracyHeaders($ex);
 
-			if ($this->isTracySupportEnabled() && $this->wire('config')->debug) {
+			$config = $this->wire()->config;
+			if ($this->isTracySupportEnabled() && $config && $config->debug) {
 				throw $ex;
 			}
-			http_response_code(500);
-			if ($this->wire('config')->debug) {
-				return "<!-- HTMX Endpoint Error: " . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . " in " . $ex->getFile() . ":" . $ex->getLine() . " -->";
+			if (!headers_sent()) {
+				http_response_code(500);
 			}
-			return "Internal Server Error";
+			if ($config && $config->debug) {
+				return '<!-- HTMX Endpoint Error: ' . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8') . ' in ' . $ex->getFile() . ':' . $ex->getLine() . ' -->';
+			}
+			return 'Internal Server Error';
 		}
 	}
 
 	protected function isTracySupportEnabled(): bool
 	{
-		if (!(bool) $this->tracySupport) return false;
-		$config = $this->wire('config');
-		if (!$config || !(bool) $config->debug) return false;
-		$modules = $this->wire('modules');
-		if (!$modules || !method_exists($modules, 'isInstalled') || !$modules->isInstalled('TracyDebugger')) return false;
-		if (!class_exists(\Tracy\Debugger::class)) return false;
+		if (!(bool) $this->tracySupport) {
+			return false;
+		}
+		$config = $this->wire()->config;
+		if (!$config || !(bool) $config->debug) {
+			return false;
+		}
+		$modules = $this->wire()->modules;
+		if (!$modules || !method_exists($modules, 'isInstalled') || !$modules->isInstalled('TracyDebugger')) {
+			return false;
+		}
+		if (!class_exists(\Tracy\Debugger::class)) {
+			return false;
+		}
 		return true;
 	}
 
@@ -607,12 +657,14 @@ HTML;
 	{
 		try {
 			$bar = \Tracy\Debugger::getBar();
-			if (!$bar) return;
+			if (!$bar) {
+				return;
+			}
 
 			$bar->addPanel(new HtmxTracyPanel(function (): array {
 				return $this->getTracyPanelData();
 			}));
-		} catch (\Throwable $ignore) {
+		} catch (\Throwable) {
 		}
 	}
 
@@ -624,44 +676,52 @@ HTML;
 		$this->primeTracyDebugContext();
 		$data = $this->tracyDebug ?: [];
 
-		$data['debugEnabled'] = (bool) ($this->wire('config')->debug ?? false);
+		$data['debugEnabled'] = (bool) ($this->wire()->config->debug ?? false);
 		$data['tracySupport'] = (bool) $this->tracySupport;
 
 		return $data;
 	}
 
-	protected function primeTracyDebugContext(): void
+	protected function primeTracyDebugContext(bool $reset = false): void
 	{
-		if (!$this->request || !($this->request->isHtmx() || $this->request->isBoosted())) return;
+		if (!isset($this->request) || (!$reset && !($this->request->isHtmx() || $this->request->isBoosted()))) {
+			return;
+		}
 
-		$input = $this->wire('input');
+		$input = $this->wire()->input;
+		$reqId = $this->tracyDebug['reqId'] ?? null;
+		if (!$reqId) {
+			$reqId = substr(str_replace('.', '', uniqid('hx', true)), 0, 24);
+		}
 
-		if (!isset($this->tracyDebug['reqId']) || !$this->tracyDebug['reqId']) {
-			$this->tracyDebug['reqId'] = substr(str_replace('.', '', uniqid('hx', true)), 0, 24);
+		if ($reset) {
+			$this->tracyDebug = ['reqId' => $reqId];
+		} else {
+			$this->tracyDebug['reqId'] = $reqId;
 		}
 
 		$defaults = [
 			'reqId' => $this->tracyDebug['reqId'],
-			'isHtmx' => (bool) $this->request->isHtmx(),
-			'isBoosted' => (bool) $this->request->isBoosted(),
-			'isHistoryRestore' => (bool) $this->request->isHistoryRestore(),
-			'isFullPage' => (bool) $this->request->isFullPage(),
-			'isPartial' => (bool) $this->request->isPartial(),
+			'isHtmx' => $this->request->isHtmx(),
+			'isBoosted' => $this->request->isBoosted(),
+			'isHistoryRestore' => $this->request->isHistoryRestore(),
+			'isFullPage' => $this->request->isFullPage(),
+			'isPartial' => $this->request->isPartial(),
 			'endpointUrl' => (string) $this->endpointUrl,
 			'method' => (string) ($_SERVER['REQUEST_METHOD'] ?? ''),
 			'uri' => (string) ($_SERVER['REQUEST_URI'] ?? ''),
-			'target' => $this->request ? $this->request->rawTarget() : null,
-			'targetTag' => $this->request ? $this->request->targetTag() : null,
-			'source' => $this->request ? $this->request->rawSource() : null,
-			'sourceTag' => $this->request ? $this->request->sourceTag() : null,
-			'triggerName' => $this->request ? $this->request->triggerName() : null,
-			'prompt' => $_SERVER['HTTP_HX_PROMPT'] ?? null,
-			'currentUrl' => $_SERVER['HTTP_HX_CURRENT_URL'] ?? null,
-			'requestType' => $_SERVER['HTTP_HX_REQUEST_TYPE'] ?? null,
+			'target' => $this->request->rawTarget(),
+			'targetTag' => $this->request->targetTag(),
+			'source' => $this->request->rawSource(),
+			'sourceTag' => $this->request->sourceTag(),
+			'triggerName' => $this->request->triggerName(),
+			'prompt' => $this->request->prompt(),
+			'currentUrl' => $this->request->currentUrl(),
+			'requestType' => $this->request->requestType(),
 			'postKeys' => is_array($_POST ?? null) ? array_keys($_POST) : [],
 			'getKeys' => is_array($_GET ?? null) ? array_keys($_GET) : [],
 			'component' => $this->tracyDebug['component'] ?? null,
-			'action' => ($this->tracyDebug['action'] ?? null) ?? ($input ? ($input->post('hx__action') ?: $input->get('hx__action')) : null),
+			'action' => ($this->tracyDebug['action'] ?? null) ?? ($input ? ($input->post('__htmx_action') ?: $input->get('__htmx_action')) : null),
 			'stateKey' => $this->tracyDebug['stateKey'] ?? null,
 			'oobCount' => $this->tracyDebug['oobCount'] ?? null,
 			'errorCode' => $this->tracyDebug['errorCode'] ?? null,
@@ -678,28 +738,50 @@ HTML;
 
 	protected function sendTracyHeaders(?\Throwable $ex = null): void
 	{
-		if (!$this->isTracySupportEnabled()) return;
-		if (!$this->request || !($this->request->isHtmx() || $this->request->isBoosted())) return;
-		if (headers_sent()) return;
+		if (!$this->isTracySupportEnabled()) {
+			return;
+		}
+		if (!isset($this->request) || !($this->request->isHtmx() || $this->request->isBoosted())) {
+			return;
+		}
+		if (headers_sent()) {
+			return;
+		}
 
 		$this->primeTracyDebugContext();
 		$d = $this->tracyDebug ?: [];
 
-		$safe = static function ($v): string {
+		$safe = static function (mixed $v): string {
 			$s = is_scalar($v) ? (string) $v : '';
-			$s = preg_replace('/\\s+/', ' ', $s ?? '');
+			$s = (string) preg_replace('/\s+/', ' ', $s);
 			return substr($s, 0, 200);
 		};
 
 		header('X-PW-HTMX: 1');
-		if (!empty($d['reqId'])) header('X-PW-HTMX-ReqId: ' . $safe($d['reqId']));
-		if (!empty($d['component'])) header('X-PW-HTMX-Component: ' . $safe($d['component']));
-		if (!empty($d['action'])) header('X-PW-HTMX-Action: ' . $safe($d['action']));
-		if (!empty($d['target'])) header('X-PW-HTMX-Target: ' . $safe($d['target']));
-		if (!empty($d['source'])) header('X-PW-HTMX-Source: ' . $safe($d['source']));
-		if (!empty($d['stateKey'])) header('X-PW-HTMX-StateKey: ' . $safe($d['stateKey']));
-		if (isset($d['oobCount'])) header('X-PW-HTMX-OOB: ' . $safe($d['oobCount']));
-		if (isset($d['requestType'])) header('X-PW-HTMX-RequestType: ' . $safe($d['requestType']));
+		if (!empty($d['reqId'])) {
+			header('X-PW-HTMX-ReqId: ' . $safe($d['reqId']));
+		}
+		if (!empty($d['component'])) {
+			header('X-PW-HTMX-Component: ' . $safe($d['component']));
+		}
+		if (!empty($d['action'])) {
+			header('X-PW-HTMX-Action: ' . $safe($d['action']));
+		}
+		if (!empty($d['target'])) {
+			header('X-PW-HTMX-Target: ' . $safe($d['target']));
+		}
+		if (!empty($d['source'])) {
+			header('X-PW-HTMX-Source: ' . $safe($d['source']));
+		}
+		if (!empty($d['stateKey'])) {
+			header('X-PW-HTMX-StateKey: ' . $safe($d['stateKey']));
+		}
+		if (isset($d['oobCount'])) {
+			header('X-PW-HTMX-OOB: ' . $safe($d['oobCount']));
+		}
+		if (isset($d['requestType'])) {
+			header('X-PW-HTMX-RequestType: ' . $safe($d['requestType']));
+		}
 
 		if (!empty($d['errorCode'])) {
 			header('X-PW-HTMX-Error-Code: ' . $safe($d['errorCode']));
@@ -718,12 +800,15 @@ HTML;
 		return $this;
 	}
 
+	/**
+	 * @param array<string, mixed> $props
+	 */
 	public function renderComponent(string $classOrAlias, array $props = [], mixed $view = null): string
 	{
 		$class = $this->components[$classOrAlias] ?? $classOrAlias;
 
 		if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
-			if ($this->wire('config')->debug) {
+			if ($this->wire()->config->debug) {
 				return "<!-- HTMX Error: {$class} is not a valid Totoglu\Htmx\Component. -->";
 			}
 			return '';
@@ -749,18 +834,21 @@ HTML;
 			$cmp->executeAction();
 			return (string) $cmp;
 		} catch (\Throwable $e) {
-			if ($this->wire('config')->debug) {
+			if ($this->wire()->config->debug) {
 				return "<!-- HTMX Component Lifecycle Error ({$class}): " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
 			}
 			return '';
 		}
 	}
 
-	public function loadExtension($extension): self
+	/**
+	 * @param string|array<int, string> $extension
+	 */
+	public function loadExtension(string|array $extension): self
 	{
 		$extensions = (array) $extension;
-		$config = $this->wire('config');
-		$extDir = rtrim($config->paths->$this, '/') . '/resources/htmx/ext/';
+		$config = $this->wire()->config;
+		$extDir = rtrim((string) $config->paths->$this, '/') . '/resources/htmx/ext/';
 
 		foreach ($extensions as $ext) {
 			$normalized = $this->normalizeExtensionName((string) $ext);
@@ -771,7 +859,7 @@ HTML;
 
 			if (!$fileExists) {
 				if ($config->debug) {
-					$this->wire('log')->warning(
+					$this->wire()->log->warning(
 						"Htmx module: extension '{$normalized}' requested but file not found at {$extDir}{$normalized}.(min.).js. Skipping."
 					);
 				}
@@ -779,7 +867,9 @@ HTML;
 			}
 
 			if (!in_array($normalized, $this->extensions, true)) {
-				$this->extensions[] = $normalized;
+				$extList = $this->extensions;
+				$extList[] = $normalized;
+				$this->extensions = $extList;
 
 				if ($this->inAdmin()) {
 					$suffix = $config->debug ? '.js' : (file_exists($minFile) ? '.min.js' : '.js');
@@ -795,9 +885,9 @@ HTML;
 		if ($load && !$this->loadHyperscript) {
 			$this->loadHyperscript = true;
 			if ($this->inAdmin()) {
-				$config = $this->wire('config');
+				$config = $this->wire()->config;
 				$minified = $config->debug ? '.js' : '.min.js';
-				$config->scripts->add($this->getHyperscriptBaseUrl() . "_hyperscript" . $minified);
+				$config->scripts->add($this->getHyperscriptBaseUrl() . '_hyperscript' . $minified);
 			}
 		} else {
 			$this->loadHyperscript = $load;
@@ -808,13 +898,12 @@ HTML;
 	/**
 	 * Developer Convenience API: Opt-in to HTMX and inject assets for this specific request.
 	 *
-	 * Example: $htmx->use('class-tools');
+	 * Example: $htmx->use('hx-sse');
 	 * Example: $htmx->use(extensions: ['sse', 'ws'], hyperscript: true);
 	 *
-	 * @param string|array $extensions
-	 * @param bool|null $hyperscript
+	 * @param string|array<int, string> $extensions
 	 */
-	public function use($extensions = [], ?bool $hyperscript = null): self
+	public function use(string|array $extensions = [], ?bool $hyperscript = null): self
 	{
 		$this->loadFrontendAssets = true;
 
@@ -831,42 +920,17 @@ HTML;
 
 	public function renderScripts(): string
 	{
-		$scripts = "";
+		$scripts = '';
 		foreach ($this->getAssetUrls() as $url) {
 			$scripts .= "<script src=\"{$url}\"></script>\n";
 		}
 
-		$csrfName = $this->wire('session')->CSRF->getTokenName();
-		$csrfValue = $this->wire('session')->CSRF->getTokenValue();
-		$scripts .= <<<HTML
-<script>
-document.addEventListener('htmx:config:request', function(evt) {
-    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
-    var request = ctx && ctx.request ? ctx.request : null;
-    if (!request || !request.method || request.method.toLowerCase() === "get") {
-        return;
-    }
-    if (evt.detail && evt.detail.parameters && typeof evt.detail.parameters === 'object') {
-        evt.detail.parameters['{$csrfName}'] = '{$csrfValue}';
-    }
-    if (request && request.body instanceof FormData) {
-        request.body.set('{$csrfName}', '{$csrfValue}');
-    }
-    if (request && request.headers && typeof request.headers.set === 'function') {
-        request.headers.set('X-Requested-With', 'XMLHttpRequest');
-    } else if (request && request.headers && typeof request.headers === 'object') {
-        request.headers['X-Requested-With'] = 'XMLHttpRequest';
-    }
-});
-</script>
-HTML;
+		$scripts .= $this->buildCsrfConfigScript();
 
 		$this->loadFrontendAssets = false;
 
 		return $scripts;
 	}
-
-	private bool $adminThemeInputfieldsReady = false;
 
 	/**
 	 * Ensures AdminThemeUikit InputfieldWrapper grid markup, classes, and column-width hooks
@@ -883,10 +947,6 @@ HTML;
 		$modules = $this->wire()->modules;
 		$page = $this->wire()->page;
 
-		if ($page && $page->template && $page->template->name === 'admin' && $config->get('InputfieldForm')) {
-			return;
-		}
-
 		$adminTheme = $this->wire('adminTheme');
 		if (!$adminTheme && $modules && $modules->isInstalled('AdminThemeUikit')) {
 			$adminTheme = $modules->get('AdminThemeUikit');
@@ -902,33 +962,94 @@ HTML;
 				$input = $this->wire()->input;
 				include_once $initFile;
 			}
-			$this->wire()->addHookBefore('Inputfield::render', $adminTheme, 'hookBeforeRenderInputfield');
-			$this->wire()->addHookBefore('Inputfield::renderValue', $adminTheme, 'hookBeforeRenderInputfield');
+			if (!($page && $page->template && $page->template->name === 'admin')) {
+				$this->wire()->addHookBefore('Inputfield::render', $adminTheme, 'hookBeforeRenderInputfield');
+				$this->wire()->addHookBefore('Inputfield::renderValue', $adminTheme, 'hookBeforeRenderInputfield');
+			}
+		}
+
+		// Ensure LanguageSupport + LanguageTabs are wired even during stateless /hx/req requests
+		if ($modules && $modules->isInstalled('LanguageSupport') && $modules->isInstalled('LanguageTabs')) {
+			try {
+				$ltCfg = $config->get('LanguageTabs');
+				if (is_array($ltCfg) && empty($ltCfg['ulClass']) && !empty($ltCfg['ulAttrs']) && str_contains((string) $ltCfg['ulAttrs'], 'uk-tab')) {
+					$ltCfg['ulClass'] = 'uk-tab';
+					$config->set('LanguageTabs', $ltCfg);
+				}
+
+				$languageSupport = $modules->get('LanguageSupport');
+				$languageTabs = $modules->get('LanguageTabs');
+				if ($languageSupport && $languageTabs) {
+					$refSettings = new \ReflectionProperty($languageTabs, 'settings');
+					$cachedSettings = $refSettings->getValue($languageTabs);
+					if (is_array($cachedSettings) && empty($cachedSettings['ulClass'])) {
+						$refSettings->setValue($languageTabs, []);
+					}
+					if (method_exists($languageTabs, 'getSettings')) {
+						$languageTabs->getSettings();
+					}
+					$refProp = new \ReflectionProperty($languageSupport, 'languageTabs');
+					if ($refProp->getValue($languageSupport) === null) {
+						$refProp->setValue($languageSupport, $languageTabs);
+					}
+				}
+			} catch (\Throwable) {
+			}
 		}
 	}
 
 	/**
 	 * Render an InputfieldWrapper as an HTMX fragment while capturing and synchronizing
 	 * newly added ProcessWire.config JS settings, scripts, and stylesheets.
-	 *
-	 * @param \ProcessWire\InputfieldWrapper $wrapper
-	 * @param bool $renderValueMode
-	 * @return string
 	 */
-	public function renderInputfieldsFragment(\ProcessWire\InputfieldWrapper $wrapper, bool $renderValueMode = false): string
+	public function renderInputfieldsFragment(InputfieldWrapper $wrapper, bool $renderValueMode = false): string
 	{
 		$this->ensureAdminThemeInputfieldsReady();
 
 		/** @var Config $config */
 		$config = $this->wire()->config;
 
+		$spacing = (int) ($config->inputfieldColumnWidthSpacing ?? 0);
+		$wrapper->set('columnWidthSpacing', $spacing);
+
 		$beforeScripts = $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
 		$beforeStyles = $config->styles ? array_values(iterator_to_array($config->styles)) : [];
 		$beforeJs = is_array($config->js()) ? $config->js() : [];
 
 		$wrapper->renderReady(null, $renderValueMode);
+		$hasLanguageFields = false;
 		foreach ($wrapper->getAll() as $inputfield) {
+			if ($inputfield instanceof InputfieldWrapper) {
+				$inputfield->set('columnWidthSpacing', $spacing);
+			}
+			if (!empty($inputfield->useLanguages)) {
+				$hasLanguageFields = true;
+			}
 			$inputfield->renderReady($wrapper, $renderValueMode);
+		}
+
+		$modules = $this->wire()->modules;
+		if ($hasLanguageFields && $modules && $modules->isInstalled('LanguageTabs')) {
+			try {
+				$languageTabs = $modules->get('LanguageTabs');
+				if ($languageTabs && method_exists($languageTabs, 'getSettings')) {
+					$ltSettings = $languageTabs->getSettings();
+					$ltInfo = $languageTabs::getModuleInfo();
+					$ltVer = $config->version . '-' . ($ltInfo['version'] ?? 1);
+					if (!empty($ltSettings['loadStyles'])) {
+						$config->styles->add($config->urls('LanguageTabs') . "LanguageTabs.css?v={$ltVer}");
+					}
+					if (!empty($ltSettings['loadScripts'])) {
+						$config->scripts->add($config->urls('LanguageTabs') . "LanguageTabs.js?v={$ltVer}");
+					}
+					$jQueryCore = $modules->get('JqueryCore');
+					if ($jQueryCore) {
+						$jQueryCore->use('longclick');
+						$jQueryCore->use('cookie');
+					}
+				}
+			} catch (\Throwable) {
+			}
 		}
 
 		$html = $renderValueMode ? $wrapper->renderValue() : $wrapper->render();
@@ -955,20 +1076,23 @@ HTML;
 		return $html;
 	}
 
+	/**
+	 * @return array<int, string>
+	 */
 	protected function getAssetUrls(): array
 	{
 		/** @var Config $config */
-		$config = $this->wire('config');
+		$config = $this->wire()->config;
 		$minified = $config->debug ? '.js' : '.min.js';
-		$extDir = rtrim($config->paths->$this, '/') . '/resources/htmx/ext/';
+		$extDir = rtrim((string) $config->paths->$this, '/') . '/resources/htmx/ext/';
 
-		$urls = [$this->getHtmxBaseUrl() . "htmx" . $minified];
+		$urls = [$this->getHtmxBaseUrl() . 'htmx' . $minified];
 
 		// Runtime helper dispatches deferred HX-Trigger blocks at afterSwap / afterSettle
-		$urls[] = $this->getHtmxBaseUrl() . "pw-htmx-runtime.js";
+		$urls[] = $this->getHtmxBaseUrl() . 'pw-htmx-runtime.js';
 
 		if ($this->inAdmin() || $this->loadHyperscript) {
-			$urls[] = $this->getHyperscriptBaseUrl() . "_hyperscript" . $minified;
+			$urls[] = $this->getHyperscriptBaseUrl() . '_hyperscript' . $minified;
 		}
 
 		foreach ($this->getNormalizedExtensions() as $ext) {
@@ -976,7 +1100,7 @@ HTML;
 			$minFile   = $extDir . $ext . '.min.js';
 			if (!file_exists($debugFile) && !file_exists($minFile)) {
 				if ($config->debug) {
-					$this->wire('log')->warning(
+					$this->wire()->log->warning(
 						"Htmx module: extension '{$ext}' file not found. Skipping from frontend asset URLs."
 					);
 				}
@@ -999,7 +1123,7 @@ HTML;
 			$this->getHtmxBaseUrl() . 'pw-htmx-guard.js',
 		];
 
-		if ($this->wire('config')->debug) {
+		if ($this->wire()->config->debug) {
 			$urls[] = $this->getHtmxBaseUrl() . 'pw-htmx-debug.js';
 		}
 
@@ -1008,12 +1132,12 @@ HTML;
 
 	protected function getHtmxBaseUrl(): string
 	{
-		return $this->wire('config')->urls->siteModules . $this->className() . "/resources/htmx/";
+		return $this->wire()->config->urls->siteModules . $this->className() . '/resources/htmx/';
 	}
 
 	protected function getHyperscriptBaseUrl(): string
 	{
-		return $this->wire('config')->urls->siteModules . $this->className() . "/resources/_hyperscript/";
+		return $this->wire()->config->urls->siteModules . $this->className() . '/resources/_hyperscript/';
 	}
 
 	/**
@@ -1030,8 +1154,8 @@ HTML;
 	/**
 	 * HTMX v4 extension name normalizer.
 	 *
-	 * Legacy short names (ws, sse, head-support) map to their hx-* canonical names
-	 * so a single list works regardless of naming convention.
+	 * Short names (ws, sse, head-support, preload, response-targets, prompt)
+	 * map to their hx-* canonical HTMX 4 names.
 	 */
 	protected function normalizeExtensionName(string $extension): string
 	{
@@ -1044,13 +1168,6 @@ HTML;
 			'preload' => 'hx-preload',
 			'response-targets', 'targets' => 'hx-targets',
 			'prompt' => 'hx-prompt',
-			'loading' => 'hx-loading',
-			'disable-element', 'disabled-elt' => 'hx-disable-element',
-			'path-deps' => 'hx-path-deps',
-			'remove-me' => 'hx-remove-me',
-			'restore', 'restore-history' => 'hx-restore',
-			'class-tools' => 'hx-class-tools',
-			'include-vals', 'vals' => 'hx-include-vals',
 			default => $extension,
 		};
 	}
@@ -1058,9 +1175,9 @@ HTML;
 	/**
 	 * Configuration options (admin UI).
 	 */
-	public function getModuleConfigInputfields(InputfieldWrapper $inputfields)
+	public function getModuleConfigInputfields(InputfieldWrapper $inputfields): InputfieldWrapper
 	{
-		$modules = $this->wire('modules');
+		$modules = $this->wire()->modules;
 
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'endpointUrl');
@@ -1090,7 +1207,7 @@ HTML;
 		$f->attr('name', 'allowComponentPaths');
 		$f->label = $this->_('Allow Component Paths in File Render');
 		$f->description = $this->_('When enabled, the configured components and UI directories will be automatically added to `allowedPaths` in `$files->render()`.');
-		$f->checked = (bool)$this->allowComponentPaths;
+		$f->checked = (bool) $this->allowComponentPaths;
 		$f->columnWidth = 100;
 		$inputfields->add($f);
 
@@ -1098,7 +1215,7 @@ HTML;
 		$f->attr('name', 'loadFrontendAssets');
 		$f->label = $this->_('Load Frontend Assets');
 		$f->description = $this->_('Check to inject HTMX scripts into `<head>` dynamically on frontend pages.');
-		$f->checked = (bool)$this->loadFrontendAssets;
+		$f->checked = (bool) $this->loadFrontendAssets;
 		$f->columnWidth = 50;
 		$inputfields->add($f);
 
@@ -1106,7 +1223,7 @@ HTML;
 		$f->attr('name', 'loadHyperscript');
 		$f->label = $this->_('Load _hyperscript');
 		$f->description = $this->_('Check to inject the `_hyperscript` library alongside HTMX on frontend pages (Always active in Admin).');
-		$f->checked = (bool)$this->loadHyperscript;
+		$f->checked = (bool) $this->loadHyperscript;
 		$f->columnWidth = 50;
 		$inputfields->add($f);
 
@@ -1114,7 +1231,7 @@ HTML;
 		$f->attr('name', 'autoFlashMessages');
 		$f->label = $this->_('Auto Flash Messages to HTMX');
 		$f->description = $this->_('When enabled, ProcessWire notices will be transformed into deferred `pw-messages` HTMX client events (dispatched after swap).');
-		$f->checked = (bool)$this->autoFlashMessages;
+		$f->checked = (bool) $this->autoFlashMessages;
 		$f->columnWidth = 50;
 		$inputfields->add($f);
 
@@ -1122,7 +1239,7 @@ HTML;
 		$f->attr('name', 'autoExtractTargets');
 		$f->label = $this->_('Auto Target Extraction (Partial Rendering)');
 		$f->description = $this->_('When enabled, the module will try to auto-extract the HTML matching `HX-Target` from the final full page render if it is a standard HTMX request.');
-		$f->checked = (bool)$this->autoExtractTargets;
+		$f->checked = (bool) $this->autoExtractTargets;
 		$f->columnWidth = 50;
 		$inputfields->add($f);
 
@@ -1171,36 +1288,36 @@ HTML;
 		$f->label = $this->_('Enable HTMX v4 Extensions');
 		$f->description = $this->_('Check which HTMX v4 extensions you want injected locally. Only extensions currently bundled with this module are listed.');
 
-		$extDir = rtrim($this->wire('config')->paths->$this, '/') . '/resources/htmx/ext/';
+		$extDir = rtrim((string) $this->wire()->config->paths->$this, '/') . '/resources/htmx/ext/';
 		$extLabels = [
-			'hx-ws'               => $this->_('WebSockets — Bi-directional server communication.'),
-			'hx-sse'              => $this->_('Server-Sent Events — Uni-directional streams.'),
-			'hx-head'             => $this->_('Head Merge — Merge <head> tags during swaps.'),
-			'hx-preload'          => $this->_('Preload — Background link preloading.'),
-			'hx-targets'          => $this->_('Response Targets — Swap to multiple targets at once.'),
-			'hx-prompt'           => $this->_('Prompt — Legacy hx-prompt compatibility layer.'),
-			'hx-csp'              => $this->_('CSP — Nonce-based Content Security Policy support.'),
-			'hx-alpine-compat'    => $this->_('Alpine Compat — Alpine.js interop helper.'),
-			'hx-multipart'        => $this->_('Multipart — Robust file upload encoding helper.'),
-			'hx-history-cache'    => $this->_('History Cache — Aggressive bfcache-style history restore.'),
-			'hx-live'             => $this->_('Live — Declarative live region/polling helpers.'),
+			'hx-ws'                => $this->_('WebSockets — Bi-directional server communication.'),
+			'hx-sse'               => $this->_('Server-Sent Events — Uni-directional streams.'),
+			'hx-head'              => $this->_('Head Merge — Merge <head> tags during swaps.'),
+			'hx-preload'           => $this->_('Preload — Background link preloading.'),
+			'hx-targets'           => $this->_('Response Targets — Swap to multiple targets at once.'),
+			'hx-prompt'            => $this->_('Prompt — Legacy hx-prompt compatibility layer.'),
+			'hx-csp'               => $this->_('CSP — Nonce-based Content Security Policy support.'),
+			'hx-alpine-compat'     => $this->_('Alpine Compat — Alpine.js interop helper.'),
+			'hx-multipart'         => $this->_('Multipart — Robust file upload encoding helper.'),
+			'hx-history-cache'     => $this->_('History Cache — Aggressive bfcache-style history restore.'),
+			'hx-live'              => $this->_('Live — Declarative live region/polling helpers.'),
 			'hx-browser-indicator' => $this->_('Browser Indicator — Native favicon/title busy indicators.'),
-			'hx-download'         => $this->_('Download — Trigger file downloads from responses.'),
-			'hx-pending'          => $this->_('Pending — Declarative busy-state class management.'),
-			'hx-ptag'             => $this->_('P-Tag — Wrap inline text nodes in paragraphs.'),
-			'hx-upsert'           => $this->_('Upsert — Insert OR update rows by selector.'),
+			'hx-download'          => $this->_('Download — Trigger file downloads from responses.'),
+			'hx-pending'           => $this->_('Pending — Declarative busy-state class management.'),
+			'hx-ptag'              => $this->_('P-Tag — Wrap inline text nodes in paragraphs.'),
+			'hx-upsert'            => $this->_('Upsert — Insert OR update rows by selector.'),
 		];
 
 		$availableExts = [];
 		if (is_dir($extDir)) {
-			foreach (glob($extDir . '*.js') as $file) {
+			foreach (glob($extDir . '*.js') ?: [] as $file) {
 				$base = basename($file, '.js');
 				if (str_ends_with($base, '.min') || str_ends_with($base, '.map')) {
 					continue;
 				}
 				$availableExts[$base] = true;
 			}
-			foreach (glob($extDir . '*.min.js') as $file) {
+			foreach (glob($extDir . '*.min.js') ?: [] as $file) {
 				$base = basename($file, '.min.js');
 				$availableExts[$base] = true;
 			}
@@ -1223,12 +1340,12 @@ HTML;
 	 */
 	protected function discoverModuleComponents(): void
 	{
-		$cache = $this->wire('cache');
+		$cache = $this->wire()->cache;
 		$paths = null;
 
 		if ($cache) {
 			$cached = $cache->get('htmx.module-components');
-			if ($cached) {
+			if (is_string($cached) && $cached !== '') {
 				$paths = json_decode($cached, true);
 			}
 		}
@@ -1238,24 +1355,28 @@ HTML;
 			if ($cache) {
 				$cache->save(
 					'htmx.module-components',
-					json_encode($paths, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+					(string) json_encode($paths, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
 					WireCache::expireNever
 				);
 			}
 		}
 
-		$classLoader = $this->wire('classLoader');
+		$classLoader = $this->wire()->classLoader;
 
 		foreach ($paths as $entry) {
 			if (!empty($entry['components']) && is_dir($entry['components'])) {
-				$classLoader->addNamespace('Htmx\Component', $entry['components']);
+				if ($classLoader) {
+					$classLoader->addNamespace('Htmx\Component', $entry['components']);
+				}
 				if ($this->allowComponentPaths && !in_array($entry['components'], $this->allowedComponentPaths, true)) {
 					$this->allowedComponentPaths[] = $entry['components'];
 				}
 			}
 
 			if (!empty($entry['ui']) && is_dir($entry['ui'])) {
-				$classLoader->addNamespace('Htmx\Ui', $entry['ui']);
+				if ($classLoader) {
+					$classLoader->addNamespace('Htmx\Ui', $entry['ui']);
+				}
 				if ($this->allowComponentPaths && !in_array($entry['ui'], $this->allowedComponentPaths, true)) {
 					$this->allowedComponentPaths[] = $entry['ui'];
 				}
@@ -1269,8 +1390,8 @@ HTML;
 	private function buildModuleComponentPaths(): array
 	{
 		$result = [];
-		$modules = $this->wire('modules');
-		$modulesPath = $this->wire('config')->paths->siteModules;
+		$modules = $this->wire()->modules;
+		$modulesPath = $this->wire()->config->paths->siteModules;
 
 		foreach ($modules as $module) {
 			$info = $modules->getModuleInfoVerbose($module);
@@ -1323,7 +1444,7 @@ HTML;
 
 	private function inAdmin(): bool
 	{
-		$page = $this->wire('page');
-		return $page && $page->template && $page->template->name === 'admin';
+		$page = $this->wire()->page;
+		return (bool) ($page && $page->template && $page->template->name === 'admin');
 	}
 }
