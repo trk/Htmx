@@ -19,7 +19,7 @@ use ProcessWire\WireData;
  *  - HX-Reswap:         override hx-swap for this response
  *  - HX-Retarget:       override hx-target for this response
  *  - HX-Reselect:       override hx-select for this response (select sub-fragment from response HTML)
- *  - HX-Trigger:        fire events immediately (JSON map of event → detail)
+ *  - HX-Trigger:        fire events (JSON map of event → detail)
  *
  * NOTE: HTMX v4 removed the dedicated HX-Trigger-After-Swap and
  * HX-Trigger-After-Settle headers. Deferred events are tunneled through
@@ -28,228 +28,384 @@ use ProcessWire\WireData;
  */
 class Response extends WireData
 {
-    private const DEFERRED_SWAP_EVENT = '__pwHtmxAfterSwap';
-    private const DEFERRED_SETTLE_EVENT = '__pwHtmxAfterSettle';
+	private const DEFERRED_SWAP_EVENT = '__pwHtmxAfterSwap';
+	private const DEFERRED_SETTLE_EVENT = '__pwHtmxAfterSettle';
 
-    /** @var array<string, mixed> Events fired immediately via HX-Trigger. */
-    private array $triggers = [];
+	/** @var array<string, mixed> Events fired immediately via HX-Trigger. */
+	private array $triggers = [];
 
-    /** @var array<string, mixed> Events tunneled for the after-swap lifecycle. */
-    private array $triggersAfterSwap = [];
+	/** @var array<string, mixed> Events tunneled for the after-swap lifecycle. */
+	private array $triggersAfterSwap = [];
 
-    /** @var array<string, mixed> Events tunneled for the after-settle lifecycle. */
-    private array $triggersAfterSettle = [];
+	/** @var array<string, mixed> Events tunneled for the after-settle lifecycle. */
+	private array $triggersAfterSettle = [];
 
-    /**
-     * Strip CR/LF characters from header values to prevent header injection.
-     */
-    private function safeHeaderValue(string $value): string
-    {
-        return str_replace(["\r", "\n", "\0"], '', $value);
-    }
+	/** @var array<string, string> Outgoing HX-* headers buffered on this response. */
+	private array $headers = [];
 
-    /**
-     * Send a client-side redirect via HX-Redirect (navigates the whole page).
-     */
-    public function redirect(string $url): self
-    {
-        header('HX-Redirect: ' . $this->safeHeaderValue($url));
-        return $this;
-    }
+	/** @var int|null Explicit HTTP status code set on this response. */
+	private ?int $statusCode = null;
 
-    /**
-     * Instruct HTMX to do a full page refresh.
-     */
-    public function refresh(): self
-    {
-        header('HX-Refresh: true');
-        return $this;
-    }
+	/**
+	 * Strip CR/LF/NUL characters from header values to prevent header injection.
+	 */
+	private function safeHeaderValue(string $value): string
+	{
+		return str_replace(["\r", "\n", "\0"], '', $value);
+	}
 
-    /**
-     * Push a new URL into the browser's history stack.
-     *
-     * Pass `true` to push the current URL, `false` to explicitly disable history.
-     */
-    public function pushUrl(string|bool $url): self
-    {
-        $val = is_bool($url) ? ($url ? 'true' : 'false') : $this->safeHeaderValue($url);
-        header('HX-Push-Url: ' . $val);
-        return $this;
-    }
+	/**
+	 * Store a header in-memory and emit it immediately when headers have not been sent.
+	 */
+	private function emitHeader(string $name, string $value): void
+	{
+		$clean = $this->safeHeaderValue($value);
+		$this->headers[$name] = $clean;
+		if (!headers_sent()) {
+			header("{$name}: {$clean}");
+		}
+	}
 
-    /**
-     * Replace the current URL in the browser's history stack (no new entry).
-     */
-    public function replaceUrl(string|bool $url): self
-    {
-        $val = is_bool($url) ? ($url ? 'true' : 'false') : $this->safeHeaderValue($url);
-        header('HX-Replace-Url: ' . $val);
-        return $this;
-    }
+	/**
+	 * Store and emit an HTTP response status code.
+	 */
+	private function emitStatusCode(int $code): void
+	{
+		$this->statusCode = $code;
+		if (!headers_sent()) {
+			http_response_code($code);
+		}
+	}
 
-    /**
-     * HX-Location: navigate to a URL using HTMX's own location logic
-     * (behaves like a boosted link, supports a detail object for options).
-     */
-    public function location(string|array $url): self
-    {
-        $val = is_array($url) ? json_encode($url, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) : $this->safeHeaderValue($url);
-        header('HX-Location: ' . $this->safeHeaderValue($val));
-        return $this;
-    }
+	/**
+	 * Inspect all buffered outgoing HX-* headers (test surface).
+	 *
+	 * @return array<string, string>
+	 */
+	public function getHeaders(): array
+	{
+		$this->syncTriggerHeader();
+		return $this->headers;
+	}
 
-    /**
-     * Override the target of the response (swap into a different element).
-     */
-    public function retarget(string $selector): self
-    {
-        header('HX-Retarget: ' . $this->safeHeaderValue($selector));
-        return $this;
-    }
+	/**
+	 * Inspect a single buffered outgoing header by name.
+	 */
+	public function getHeader(string $name): ?string
+	{
+		$this->syncTriggerHeader();
+		foreach ($this->headers as $k => $v) {
+			if (strcasecmp($k, $name) === 0) {
+				return $v;
+			}
+		}
+		return null;
+	}
 
-    /**
-     * Override the swap behavior of the response.
-     */
-    public function reswap(string $modifier): self
-    {
-        header('HX-Reswap: ' . $this->safeHeaderValue($modifier));
-        return $this;
-    }
+	/**
+	 * Inspect the explicit HTTP status code set on this response, if any.
+	 */
+	public function getStatusCode(): ?int
+	{
+		return $this->statusCode;
+	}
 
-    /**
-     * HTMX v4: Override which sub-fragment of the response HTML is selected
-     * for swapping. Equivalent to the hx-select attribute, but applied per-response.
-     *
-     * Example: reselect('#error-summary') to only swap the error block.
-     */
-    public function reselect(string $selector): self
-    {
-        header('HX-Reselect: ' . $this->safeHeaderValue($selector));
-        return $this;
-    }
+	/**
+	 * Reset buffered headers, triggers, and status code.
+	 */
+	public function reset(): self
+	{
+		$this->triggers = [];
+		$this->triggersAfterSwap = [];
+		$this->triggersAfterSettle = [];
+		$this->headers = [];
+		$this->statusCode = null;
+		return $this;
+	}
 
-    /**
-     * Add an event trigger to be fired IMMEDIATELY when the response headers arrive
-     * (before any swap happens). Use triggerAfterSwap / triggerAfterSettle for UI events.
-     */
-    public function trigger(string $name, mixed $data = null): self
-    {
-        $this->triggers[$name] = $data;
-        $this->applyTriggers();
-        return $this;
-    }
+	/**
+	 * Send a client-side redirect via HX-Redirect (navigates the whole page).
+	 */
+	public function redirect(string $url): self
+	{
+		$this->emitHeader('HX-Redirect', $url);
+		return $this;
+	}
 
-    /**
-     * Add an event trigger to be fired AFTER the swap phase completes.
-     *
-     * This is the ideal moment for most UI events: the new DOM is in place.
-     */
-    public function triggerAfterSwap(string $name, mixed $data = null): self
-    {
-        $this->triggersAfterSwap[$name] = $data;
-        $this->applyTriggers();
-        return $this;
-    }
+	/**
+	 * Instruct HTMX to do a full page refresh.
+	 */
+	public function refresh(): self
+	{
+		$this->emitHeader('HX-Refresh', 'true');
+		return $this;
+	}
 
-    /**
-     * Add an event trigger to be fired AFTER the settle phase completes
-     * (all CSS transitions / scroll animations finished).
-     */
-    public function triggerAfterSettle(string $name, mixed $data = null): self
-    {
-        $this->triggersAfterSettle[$name] = $data;
-        $this->applyTriggers();
-        return $this;
-    }
+	/**
+	 * Push a new URL into the browser's history stack.
+	 *
+	 * Pass `true` to push the current URL, `false` to explicitly disable history.
+	 */
+	public function pushUrl(string|bool $url = true): self
+	{
+		$val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+		$this->emitHeader('HX-Push-Url', $val);
+		return $this;
+	}
 
-    /**
-     * Helper to correctly JSON-encode the triggers map and emit the HX-Trigger header.
-     *
-     * Merges immediate events with tunneled deferred-event envelopes.
-     */
-    private function applyTriggers(): void
-    {
-        $payload = [];
+	/**
+	 * Replace the current URL in the browser's history stack (no new entry).
+	 */
+	public function replaceUrl(string|bool $url = true): self
+	{
+		$val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+		$this->emitHeader('HX-Replace-Url', $val);
+		return $this;
+	}
 
-        foreach ($this->triggers as $name => $data) {
-            $payload[$name] = $data ?? '';
-        }
+	/**
+	 * HX-Location: navigate to a URL using HTMX's own location logic
+	 * (behaves like a boosted link, supports an options array as second argument or full array).
+	 *
+	 * @param string|array<string, mixed> $url
+	 * @param array<string, mixed> $options
+	 */
+	public function location(string|array $url, array $options = []): self
+	{
+		if (is_array($url)) {
+			$encoded = json_encode($url, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+			$val = is_string($encoded) ? $encoded : '{}';
+		} elseif ($options !== []) {
+			$payload = array_merge(['path' => $url], $options);
+			$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+			$val = is_string($encoded) ? $encoded : $url;
+		} else {
+			$val = $url;
+		}
 
-        if ($this->triggersAfterSwap !== []) {
-            $payload[self::DEFERRED_SWAP_EVENT] = ['events' => $this->triggersAfterSwap];
-        }
+		$this->emitHeader('HX-Location', $val);
+		return $this;
+	}
 
-        if ($this->triggersAfterSettle !== []) {
-            $payload[self::DEFERRED_SETTLE_EVENT] = ['events' => $this->triggersAfterSettle];
-        }
+	/**
+	 * Override the target of the response (swap into a different element).
+	 */
+	public function retarget(string $selector): self
+	{
+		$this->emitHeader('HX-Retarget', $selector);
+		return $this;
+	}
 
-        if ($payload === []) {
-            return;
-        }
+	/**
+	 * Override the swap behavior of the response.
+	 */
+	public function reswap(string $modifier): self
+	{
+		$this->emitHeader('HX-Reswap', $modifier);
+		return $this;
+	}
 
-        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if ($encoded === false) {
-            $encoded = '{}';
-        }
-        header('HX-Trigger: ' . $this->safeHeaderValue($encoded));
-    }
+	/**
+	 * HTMX v4: Override which sub-fragment of the response HTML is selected
+	 * for swapping. Equivalent to the hx-select attribute, but applied per-response.
+	 *
+	 * Example: reselect('#error-summary') to only swap the error block.
+	 */
+	public function reselect(string $selector): self
+	{
+		$this->emitHeader('HX-Reselect', $selector);
+		return $this;
+	}
 
-    /**
-     * Return HTTP 286 to stop HTMX polling (every 2s polling → terminate).
-     */
-    public function stopPolling(): void
-    {
-        http_response_code(286);
-    }
+	/**
+	 * Add an event trigger to be fired via HX-Trigger.
+	 *
+	 * Supports `:swap` and `:settle` suffixes on the event name to route
+	 * directly into afterSwap or afterSettle deferred queues.
+	 */
+	public function trigger(string $name, mixed $data = null): self
+	{
+		if (str_ends_with($name, ':swap')) {
+			$cleanName = substr($name, 0, -5);
+			if ($cleanName !== '') {
+				return $this->triggerAfterSwap($cleanName, $data);
+			}
+		}
 
-    /**
-     * Send a 4xx validation error response. Defaults to HTTP 422 Unprocessable Entity.
-     *
-     * HTMX v4 swaps error responses (4xx/5xx) by default, so you can return
-     * a validation-error form fragment directly. Pair with:
-     *   hx-status:422="swap:innerHTML target:#errors"
-     */
-    public function validationError(?string $target = null, ?string $select = null, int $httpCode = 422): self
-    {
-        http_response_code($httpCode);
+		if (str_ends_with($name, ':settle')) {
+			$cleanName = substr($name, 0, -7);
+			if ($cleanName !== '') {
+				return $this->triggerAfterSettle($cleanName, $data);
+			}
+		}
 
-        if ($target !== null) {
-            $this->retarget($target);
-        }
+		$this->triggers[$name] = $data;
+		$this->applyTriggers();
+		return $this;
+	}
 
-        if ($select !== null) {
-            $this->reselect($select);
-        }
+	/**
+	 * Add an event trigger to be fired AFTER the swap phase completes.
+	 */
+	public function triggerAfterSwap(string $name, mixed $data = null): self
+	{
+		$this->triggersAfterSwap[$name] = $data;
+		$this->applyTriggers();
+		return $this;
+	}
 
-        return $this;
-    }
+	/**
+	 * Add an event trigger to be fired AFTER the settle phase completes.
+	 */
+	public function triggerAfterSettle(string $name, mixed $data = null): self
+	{
+		$this->triggersAfterSettle[$name] = $data;
+		$this->applyTriggers();
+		return $this;
+	}
 
-    /**
-     * Send a 200 OK with explicit no-op swap semantics via HX-Reswap.
-     * Useful when the response carries only OOB swaps or events and you
-     * do not want the main target to be modified.
-     */
-    public function noSwap(): self
-    {
-        return $this->reswap('none');
-    }
+	/**
+	 * Bulk-set triggers from an associative array.
+	 *
+	 * Keys ending with `:swap` are routed to afterSwap; keys ending with `:settle`
+	 * are routed to afterSettle; all other keys are dispatched immediately.
+	 *
+	 * @param array<string, mixed> $triggers
+	 */
+	public function setTriggers(array $triggers): self
+	{
+		foreach ($triggers as $name => $data) {
+			if (!is_string($name) || $name === '') {
+				continue;
+			}
+			if (str_ends_with($name, ':swap')) {
+				$cleanName = substr($name, 0, -5);
+				if ($cleanName !== '') {
+					$this->triggersAfterSwap[$cleanName] = $data;
+				}
+			} elseif (str_ends_with($name, ':settle')) {
+				$cleanName = substr($name, 0, -7);
+				if ($cleanName !== '') {
+					$this->triggersAfterSettle[$cleanName] = $data;
+				}
+			} else {
+				$this->triggers[$name] = $data;
+			}
+		}
 
-    /**
-     * Emit all deferred headers accumulated during the request lifecycle.
-     *
-     * Safe no-op when headers have already been sent. Always re-applies
-     * HX-Trigger so deferred afterSwap / afterSettle events are included
-     * even if they were added after the initial trigger() call.
-     */
-    public function applyHeaders(): void
-    {
-        if (headers_sent()) {
-            return;
-        }
+		$this->applyTriggers();
+		return $this;
+	}
 
-        // Re-emit the merged HX-Trigger header so any late additions
-        // (flash messages, OOB notifications, etc.) are included.
-        $this->applyTriggers();
-    }
+	/**
+	 * Build the merged HX-Trigger payload array.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function buildTriggerPayload(): array
+	{
+		$payload = [];
+
+		foreach ($this->triggers as $name => $data) {
+			$payload[$name] = $data ?? '';
+		}
+
+		if ($this->triggersAfterSwap !== []) {
+			$payload[self::DEFERRED_SWAP_EVENT] = ['events' => $this->triggersAfterSwap];
+		}
+
+		if ($this->triggersAfterSettle !== []) {
+			$payload[self::DEFERRED_SETTLE_EVENT] = ['events' => $this->triggersAfterSettle];
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * Synchronize the in-memory `HX-Trigger` header from current trigger queues.
+	 */
+	private function syncTriggerHeader(): void
+	{
+		$payload = $this->buildTriggerPayload();
+		if ($payload === []) {
+			unset($this->headers['HX-Trigger']);
+			return;
+		}
+
+		$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+		if ($encoded === false) {
+			$encoded = '{}';
+		}
+
+		$this->headers['HX-Trigger'] = $this->safeHeaderValue($encoded);
+	}
+
+	/**
+	 * Helper to correctly JSON-encode the triggers map and emit the HX-Trigger header.
+	 */
+	private function applyTriggers(): void
+	{
+		$this->syncTriggerHeader();
+		if (isset($this->headers['HX-Trigger']) && !headers_sent()) {
+			header('HX-Trigger: ' . $this->headers['HX-Trigger']);
+		}
+	}
+
+	/**
+	 * Return HTTP 286 to stop HTMX polling (every 2s polling → terminate).
+	 */
+	public function stopPolling(): void
+	{
+		$this->emitStatusCode(286);
+	}
+
+	/**
+	 * Send a 4xx validation error response. Defaults to HTTP 422 Unprocessable Entity.
+	 *
+	 * HTMX v4 swaps error responses (4xx/5xx) by default, so you can return
+	 * a validation-error form fragment directly. Pair with:
+	 *   hx-status:422="swap:outerMorph target:#errors"
+	 */
+	public function validationError(?string $target = null, ?string $select = null, int $httpCode = 422): self
+	{
+		$this->emitStatusCode($httpCode);
+
+		if ($target !== null) {
+			$this->retarget($target);
+		}
+
+		if ($select !== null) {
+			$this->reselect($select);
+		}
+
+		return $this;
+	}
+
+	/**
+	 * Send a 200 OK with explicit no-op swap semantics via HX-Reswap.
+	 */
+	public function noSwap(): self
+	{
+		return $this->reswap('none');
+	}
+
+	/**
+	 * Emit all deferred headers accumulated during the request lifecycle.
+	 */
+	public function applyHeaders(): void
+	{
+		$this->syncTriggerHeader();
+
+		if (headers_sent()) {
+			return;
+		}
+
+		if ($this->statusCode !== null) {
+			http_response_code($this->statusCode);
+		}
+
+		foreach ($this->headers as $name => $value) {
+			header("{$name}: {$value}");
+		}
+	}
 }
