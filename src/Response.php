@@ -225,21 +225,7 @@ class Response extends WireData
 	 */
 	public function trigger(string $name, mixed $data = null): self
 	{
-		if (str_ends_with($name, ':swap')) {
-			$cleanName = substr($name, 0, -5);
-			if ($cleanName !== '') {
-				return $this->triggerAfterSwap($cleanName, $data);
-			}
-		}
-
-		if (str_ends_with($name, ':settle')) {
-			$cleanName = substr($name, 0, -7);
-			if ($cleanName !== '') {
-				return $this->triggerAfterSettle($cleanName, $data);
-			}
-		}
-
-		$this->triggers[$name] = $data;
+		$this->queueTrigger($name, $data);
 		$this->applyTriggers();
 		return $this;
 	}
@@ -278,23 +264,35 @@ class Response extends WireData
 			if (!is_string($name) || $name === '') {
 				continue;
 			}
-			if (str_ends_with($name, ':swap')) {
-				$cleanName = substr($name, 0, -5);
-				if ($cleanName !== '') {
-					$this->triggersAfterSwap[$cleanName] = $data;
-				}
-			} elseif (str_ends_with($name, ':settle')) {
-				$cleanName = substr($name, 0, -7);
-				if ($cleanName !== '') {
-					$this->triggersAfterSettle[$cleanName] = $data;
-				}
-			} else {
-				$this->triggers[$name] = $data;
-			}
+			$this->queueTrigger($name, $data);
 		}
 
 		$this->applyTriggers();
 		return $this;
+	}
+
+	/**
+	 * Route a single trigger name into immediate, afterSwap (`:swap`), or afterSettle (`:settle`) queue.
+	 */
+	private function queueTrigger(string $name, mixed $data = null): void
+	{
+		if (str_ends_with($name, ':swap')) {
+			$cleanName = substr($name, 0, -5);
+			if ($cleanName !== '') {
+				$this->triggersAfterSwap[$cleanName] = $data;
+				return;
+			}
+		}
+
+		if (str_ends_with($name, ':settle')) {
+			$cleanName = substr($name, 0, -7);
+			if ($cleanName !== '') {
+				$this->triggersAfterSettle[$cleanName] = $data;
+				return;
+			}
+		}
+
+		$this->triggers[$name] = $data;
 	}
 
 	/**

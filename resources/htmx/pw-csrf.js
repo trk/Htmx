@@ -6,14 +6,23 @@ document.addEventListener('htmx:config:request', function (evt) {
   var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
   var request = ctx && ctx.request ? ctx.request : null;
 
-  if (!request || !request.method || request.method.toLowerCase() === 'get') {
+  if (!request || !request.method) {
+    return;
+  }
+  var method = request.method.toLowerCase();
+  if (method === 'get' || method === 'query') {
     return;
   }
 
   var tokenName = null;
   var tokenValue = null;
 
-  if (typeof ProcessWire !== 'undefined' && ProcessWire.config && ProcessWire.config.csrf) {
+  if (typeof window !== 'undefined' && window.__pwHtmxCsrf && window.__pwHtmxCsrf.name && window.__pwHtmxCsrf.value) {
+    tokenName = window.__pwHtmxCsrf.name;
+    tokenValue = window.__pwHtmxCsrf.value;
+  }
+
+  if ((!tokenName || !tokenValue) && typeof ProcessWire !== 'undefined' && ProcessWire.config && ProcessWire.config.csrf) {
     var keys = Object.keys(ProcessWire.config.csrf);
     if (keys.length > 0) {
       tokenName = keys[0];

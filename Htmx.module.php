@@ -42,9 +42,6 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	/** @var array<string> Valid and checked paths to components and UI that are allowed for rendering */
 	public array $allowedComponentPaths = [];
 
-	/** @var array<string, bool> Tracks which short-name aliases have already been registered (perf guard) */
-	private array $registeredAliases = [];
-
 	/**
 	 * Internal debug info for Tracy panel / response headers (per request).
 	 * @var array<string, mixed>
@@ -195,7 +192,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
 			// 1. Target Auto-Extraction (Partial Render)
 			if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
 				$targetId = $this->request->target();
-				if ($targetId && preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $targetId) && str_contains($html, 'id="' . $targetId . '"')) {
+				if ($targetId && preg_match('/^[A-Za-z][A-Za-z0-9\-_:.]*$/', $targetId) && (str_contains($html, 'id="' . $targetId . '"') || str_contains($html, "id='" . $targetId . "'"))
+				) {
 					try {
 						libxml_use_internal_errors(true);
 						$dom = new \DOMDocument();
@@ -301,7 +299,7 @@ HTML;
 	}
 
 	/**
-	 * Build inline CSRF configuration script for frontend HTMX v4 requests.
+	 * Build inline CSRF seed script for frontend HTMX v4 requests (`pw-csrf.js` handles `htmx:config:request`).
 	 */
 	protected function buildCsrfConfigScript(): string
 	{
@@ -311,30 +309,16 @@ HTML;
 			return '';
 		}
 
-		$csrfName = (string) $csrf->getTokenName();
-		$csrfValue = (string) $csrf->getTokenValue();
+		$csrfPayload = json_encode([
+			'name' => (string) $csrf->getTokenName(),
+			'value' => (string) $csrf->getTokenValue(),
+		], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
 
-		return <<<HTML
-<script>
-document.addEventListener('htmx:config:request', function(evt) {
-    var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
-    var request = ctx && ctx.request ? ctx.request : null;
-    if (!request || !request.method || request.method.toLowerCase() === "get") {
-        return;
-    }
-    if (request.body instanceof FormData || (typeof URLSearchParams !== 'undefined' && request.body instanceof URLSearchParams)) {
-        request.body.set('{$csrfName}', '{$csrfValue}');
-    }
-    if (request.headers && typeof request.headers.set === 'function') {
-        request.headers.set('X-Requested-With', 'XMLHttpRequest');
-        request.headers.set('X-{$csrfName}', '{$csrfValue}');
-    } else if (request.headers && typeof request.headers === 'object') {
-        request.headers['X-Requested-With'] = 'XMLHttpRequest';
-        request.headers['X-{$csrfName}'] = '{$csrfValue}';
-    }
-});
-</script>
-HTML;
+		if (!is_string($csrfPayload) || $csrfPayload === '') {
+			return '';
+		}
+
+		return "<script>window.__pwHtmxCsrf = {$csrfPayload};</script>";
 	}
 
 	/**
@@ -379,32 +363,24 @@ HTML;
 		$log = $this->wire()->log;
 
 		if ($input === null) {
-			$this->tracyDebug['errorCode'] = 'no_input';
-			$this->sendTracyHeaders();
-			if (!headers_sent()) {
-				http_response_code(500);
-			}
-			return 'Internal Server Error';
+			return $this->failEndpoint('no_input', 500, 'Internal Server Error');
 		}
 
 		$this->primeTracyDebugContext(true);
 
-		$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-		$isPost = ($method === 'POST');
-
-		// Prefer POST payload, then GET query (HTMX v4 hx-query / QUERY actions)
+		// Support POST, QUERY (body or query string), and GET state payloads
 		$payload = null;
 		$payloadKey = 'hx__state';
 		$target = $this->request->target();
 		if ($target) {
 			$key = 'hx__state__' . $target;
-			$payload = $isPost ? $input->post($key) : $input->get($key);
+			$payload = $input->post($key) ?? $input->get($key);
 			if ($payload) {
 				$payloadKey = $key;
 			}
 		}
 		if (!$payload) {
-			$payload = $isPost ? $input->post('hx__state') : $input->get('hx__state');
+			$payload = $input->post('hx__state') ?? $input->get('hx__state');
 		}
 
 		if (is_array($payload)) {
@@ -415,14 +391,7 @@ HTML;
 			if ($log) {
 				$log->error('HTMX Endpoint Failed: Missing hx__state in request data.');
 			}
-			$this->tracyDebug['errorCode'] = 'missing_state';
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			if (!headers_sent()) {
-				http_response_code(400);
-			}
-			return 'Bad Request: Missing HTMX State Payload.';
+			return $this->failEndpoint('missing_state', 400, 'Bad Request: Missing HTMX State Payload.', $payloadKey);
 		}
 
 		try {
@@ -431,14 +400,7 @@ HTML;
 			if ($log) {
 				$log->error('HTMX Endpoint Failed: ' . $ex->getMessage());
 			}
-			$this->tracyDebug['errorCode'] = 'missing_salt';
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			if (!headers_sent()) {
-				http_response_code(500);
-			}
-			return 'Internal Server Error: Module crypto configuration missing.';
+			return $this->failEndpoint('missing_salt', 500, 'Internal Server Error: Module crypto configuration missing.', $payloadKey);
 		}
 
 		try {
@@ -448,54 +410,28 @@ HTML;
 			if ($log) {
 				$log->error('HTMX Endpoint Failed: ' . $msg);
 			}
-			$this->tracyDebug['stateKey'] = $payloadKey;
 			$code = $ex->getCode();
 
 			if ($code === Component::ERR_BAD_HMAC) {
-				$this->tracyDebug['errorCode'] = 'bad_hmac';
-				$this->sendTracyHeaders();
-				$this->response->applyHeaders();
-				if (!headers_sent()) {
-					http_response_code(403);
-				}
-				return 'Forbidden: Invalid HTMX State Signature.';
+				return $this->failEndpoint('bad_hmac', 403, 'Forbidden: Invalid HTMX State Signature.', $payloadKey);
 			}
 
 			if ($code === Component::ERR_STATE_EXPIRED) {
-				$this->tracyDebug['errorCode'] = 'state_expired';
-				$this->sendTracyHeaders();
-				$this->response->applyHeaders();
-				if (!headers_sent()) {
-					http_response_code(419);
-				}
-				return 'Page Expired: HTMX State Payload Expired.';
+				return $this->failEndpoint('state_expired', 419, 'Page Expired: HTMX State Payload Expired.', $payloadKey);
 			}
 
-			$this->tracyDebug['errorCode'] = ($code === Component::ERR_MALFORMED_STATE)
-				? 'malformed_state'
-				: 'invalid_state';
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			if (!headers_sent()) {
-				http_response_code(400);
-			}
-			return $this->tracyDebug['errorCode'] === 'malformed_state'
+			$errorCode = ($code === Component::ERR_MALFORMED_STATE) ? 'malformed_state' : 'invalid_state';
+			$body = $errorCode === 'malformed_state'
 				? 'Bad Request: Malformed HTMX State Payload.'
 				: 'Bad Request: Invalid State Structure.';
+			return $this->failEndpoint($errorCode, 400, $body, $payloadKey);
 		}
 
 		if (empty($decoded['__cmp']) || !is_string($decoded['__cmp'])) {
 			if ($log) {
 				$log->error('HTMX Endpoint Failed: Invalid State Structure or missing __cmp.');
 			}
-			$this->tracyDebug['errorCode'] = 'invalid_state';
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			if (!headers_sent()) {
-				http_response_code(400);
-			}
-			return 'Bad Request: Invalid State Structure.';
+			return $this->failEndpoint('invalid_state', 400, 'Bad Request: Invalid State Structure.', $payloadKey);
 		}
 
 		$class = $decoded['__cmp'];
@@ -505,19 +441,20 @@ HTML;
 			$class = $aliasLookup;
 		} else {
 			$knownFullNames = array_flip(array_values($this->components));
-			if (!isset($knownFullNames[$class])) {
+			$isAutoDiscovered = str_starts_with($class, 'Htmx\\Component\\')
+				&& class_exists($class)
+				&& is_subclass_of($class, Component::class);
+			if (!isset($knownFullNames[$class]) && !$isAutoDiscovered) {
 				if ($log) {
 					$log->error('HTMX Endpoint Failed: Component not registered with global endpoint. Class: ' . $class);
 				}
-				$this->tracyDebug['errorCode'] = 'component_unregistered';
-				$this->tracyDebug['component'] = $class;
-				$this->tracyDebug['stateKey'] = $payloadKey;
-				$this->sendTracyHeaders();
-				$this->response->applyHeaders();
-				if (!headers_sent()) {
-					http_response_code(400);
-				}
-				return 'Bad Request: Component not registered for the global HTMX endpoint.';
+				return $this->failEndpoint(
+					'component_unregistered',
+					400,
+					'Bad Request: Component not registered for the global HTMX endpoint.',
+					$payloadKey,
+					$class
+				);
 			}
 		}
 
@@ -525,15 +462,7 @@ HTML;
 			if ($log) {
 				$log->error('HTMX Endpoint Failed: Invalid Component Class. Class: ' . $class);
 			}
-			$this->tracyDebug['errorCode'] = 'invalid_component';
-			$this->tracyDebug['component'] = $class;
-			$this->tracyDebug['stateKey'] = $payloadKey;
-			$this->sendTracyHeaders();
-			$this->response->applyHeaders();
-			if (!headers_sent()) {
-				http_response_code(400);
-			}
-			return 'Bad Request: Invalid Component Class.';
+			return $this->failEndpoint('invalid_component', 400, 'Bad Request: Invalid Component Class.', $payloadKey, $class);
 		}
 
 		try {
@@ -563,15 +492,10 @@ HTML;
 			$tAfterRender = microtime(true);
 
 			// 1. Inject accumulated OOB swaps + <hx-partial>
+			$oobCount = $this->fragment->count();
 			$oob = $this->fragment->getOobSwaps();
 			if ($oob !== '') {
 				$html .= "\n" . $oob;
-			}
-			if ($oob === '') {
-				$oobCount = 0;
-			} else {
-				$oobSplit = preg_split('/\R+/', trim($oob), -1, PREG_SPLIT_NO_EMPTY);
-				$oobCount = is_array($oobSplit) ? count($oobSplit) : 1;
 			}
 			$this->tracyDebug['oobCount'] = $oobCount;
 			$this->tracyDebug['timingMs'] = [
@@ -632,6 +556,30 @@ HTML;
 			}
 			return 'Internal Server Error';
 		}
+	}
+
+	private function failEndpoint(
+		string $errorCode,
+		int $statusCode,
+		string $body,
+		?string $stateKey = null,
+		?string $component = null
+	): string {
+		$this->tracyDebug['errorCode'] = $errorCode;
+		if ($stateKey !== null) {
+			$this->tracyDebug['stateKey'] = $stateKey;
+		}
+		if ($component !== null) {
+			$this->tracyDebug['component'] = $component;
+		}
+		$this->sendTracyHeaders();
+		if (isset($this->response)) {
+			$this->response->applyHeaders();
+		}
+		if (!headers_sent()) {
+			http_response_code($statusCode);
+		}
+		return $body;
 	}
 
 	protected function isTracySupportEnabled(): bool
@@ -806,9 +754,10 @@ HTML;
 	public function renderComponent(string $classOrAlias, array $props = [], mixed $view = null): string
 	{
 		$class = $this->components[$classOrAlias] ?? $classOrAlias;
+		$config = $this->wire()->config;
 
 		if (!class_exists($class) || !is_subclass_of($class, Component::class)) {
-			if ($this->wire()->config->debug) {
+			if ($config && $config->debug) {
 				return "<!-- HTMX Error: {$class} is not a valid Totoglu\Htmx\Component. -->";
 			}
 			return '';
@@ -818,23 +767,22 @@ HTML;
 			/** @var Component $cmp */
 			$cmp = new $class();
 
-			if ($cmp->requestUrl() === $this->endpointUrl) {
-				$shortName = (new \ReflectionClass($cmp))->getShortName();
-				if (!isset($this->registeredAliases[$shortName]) || ($this->components[$shortName] ?? null) !== $class) {
-					$this->registerComponent($shortName, $class);
-					$this->registeredAliases[$shortName] = true;
-				}
+			$shortName = (new \ReflectionClass($cmp))->getShortName();
+			if (($this->components[$shortName] ?? null) !== $class) {
+				$this->registerComponent($shortName, $class);
 			}
 			if ($view !== null) {
 				$cmp->setView($view);
 			}
 			$cmp->fill($props);
 			$cmp->mount();
-			$cmp->hydrate();
-			$cmp->executeAction();
+			if ($cmp->matchesRequestState()) {
+				$cmp->hydrate();
+				$cmp->executeAction();
+			}
 			return (string) $cmp;
 		} catch (\Throwable $e) {
-			if ($this->wire()->config->debug) {
+			if ($config && $config->debug) {
 				return "<!-- HTMX Component Lifecycle Error ({$class}): " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
 			}
 			return '';
@@ -947,7 +895,7 @@ HTML;
 		$modules = $this->wire()->modules;
 		$page = $this->wire()->page;
 
-		$adminTheme = $this->wire('adminTheme');
+		$adminTheme = $this->wire()->adminTheme;
 		if (!$adminTheme && $modules && $modules->isInstalled('AdminThemeUikit')) {
 			$adminTheme = $modules->get('AdminThemeUikit');
 			if ($adminTheme) {
@@ -1090,6 +1038,7 @@ HTML;
 
 		// Runtime helper dispatches deferred HX-Trigger blocks at afterSwap / afterSettle
 		$urls[] = $this->getHtmxBaseUrl() . 'pw-htmx-runtime.js';
+		$urls[] = $this->getHtmxBaseUrl() . 'pw-csrf.js';
 
 		if ($this->inAdmin() || $this->loadHyperscript) {
 			$urls[] = $this->getHyperscriptBaseUrl() . '_hyperscript' . $minified;
@@ -1119,7 +1068,6 @@ HTML;
 	protected function getAdminHelperAssetUrls(): array
 	{
 		$urls = [
-			$this->getHtmxBaseUrl() . 'pw-csrf.js',
 			$this->getHtmxBaseUrl() . 'pw-htmx-guard.js',
 		];
 

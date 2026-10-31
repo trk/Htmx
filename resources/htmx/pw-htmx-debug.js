@@ -12,8 +12,12 @@
 
   function safeStatus(ctx) {
     try {
-      if (!ctx) return null;
-      if (ctx.statusCode) return ctx.statusCode;
+      if (!ctx) {
+        return null;
+      }
+      if (ctx.statusCode) {
+        return ctx.statusCode;
+      }
       if (ctx.response && ctx.response.raw && typeof ctx.response.raw.status === 'number') {
         return ctx.response.raw.status;
       }
@@ -26,7 +30,9 @@
 
   function safeUrl(ctx, request) {
     try {
-      if (request && typeof request.action === 'string') return request.action;
+      if (request && typeof request.action === 'string') {
+        return request.action;
+      }
       if (ctx && ctx.response && ctx.response.raw && typeof ctx.response.raw.url === 'string') {
         return ctx.response.raw.url;
       }
@@ -35,7 +41,9 @@
   }
 
   function log(eventName, evt) {
-    if (!enabled()) return;
+    if (!enabled()) {
+      return;
+    }
 
     try {
       var detail = (evt && evt.detail) || {};

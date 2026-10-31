@@ -53,7 +53,9 @@
     var timerId = null;
 
     function run() {
-      if (fired) return;
+      if (fired) {
+        return;
+      }
       fired = true;
       document.removeEventListener(lifecycleEventName, run);
       if (timerId !== null) {
@@ -75,13 +77,17 @@
 
   document.addEventListener('__pwHtmxAfterSwap', function (evt) {
     var eventMap = getDeferredEvents(evt);
-    if (!eventMap) return;
+    if (!eventMap) {
+      return;
+    }
     dispatchAfter('htmx:after:swap', eventMap, false);
   });
 
   document.addEventListener('__pwHtmxAfterSettle', function (evt) {
     var eventMap = getDeferredEvents(evt);
-    if (!eventMap) return;
+    if (!eventMap) {
+      return;
+    }
     dispatchAfter('htmx:after:settle', eventMap, true);
   });
 
@@ -107,7 +113,9 @@
 
         if (payload && Array.isArray(payload.styles)) {
           payload.styles.forEach(function (href) {
-            if (!href || document.querySelector('link[href="' + href + '"]')) return;
+            if (!href || document.querySelector('link[href="' + href + '"]')) {
+              return;
+            }
             var link = document.createElement('link');
             link.rel = 'stylesheet';
             link.href = href;
@@ -117,7 +125,9 @@
 
         if (payload && Array.isArray(payload.scripts)) {
           payload.scripts.forEach(function (src) {
-            if (!src || document.querySelector('script[src="' + src + '"]')) return;
+            if (!src || document.querySelector('script[src="' + src + '"]')) {
+              return;
+            }
             var script = document.createElement('script');
             script.src = src;
             (document.head || document.documentElement).appendChild(script);
@@ -174,7 +184,9 @@
     }
     if (detail.task && detail.task.ctx && detail.task.ctx.target && detail.task.ctx.target.id) {
       var byId = document.getElementById(detail.task.ctx.target.id);
-      if (byId) return byId;
+      if (byId) {
+        return byId;
+      }
     }
     if (evt && evt.target && evt.target !== document && evt.target.nodeType === 1 && evt.target.isConnected) {
       return evt.target;

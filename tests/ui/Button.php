@@ -30,12 +30,14 @@ class Button extends Ui
 
 		$this->attributes->addClass($baseClass);
 
+		$tag = preg_replace('/[^a-zA-Z0-9_-]/', '', $this->parameters->getString('tag')) ?: 'button';
+
 		return sprintf(
 			'<%s %s>%s</%s>',
-			$this->parameters->getString('tag'),
+			$tag,
 			$this->attributes->render(),
-			$this->parameters->getString('label'),
-			$this->parameters->getString('tag')
+			$this->esc($this->parameters->getString('label')),
+			$tag
 		);
 	}
 }

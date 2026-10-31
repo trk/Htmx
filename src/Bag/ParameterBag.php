@@ -11,15 +11,11 @@ namespace Totoglu\Htmx\Bag;
  */
 class ParameterBag implements \Countable, \IteratorAggregate
 {
-	/** @var array<string, mixed> */
-	protected array $parameters;
-
 	/**
 	 * @param array<string, mixed> $parameters
 	 */
-	public function __construct(array $parameters = [])
+	public function __construct(protected array $parameters = [])
 	{
-		$this->parameters = $parameters;
 	}
 
 	/**

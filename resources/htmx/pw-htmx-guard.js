@@ -6,9 +6,21 @@
 document.addEventListener('htmx:before:swap', function (evt) {
   try {
     var detail = evt.detail || {};
-    var responseText = (detail.ctx && typeof detail.ctx.text === 'string') ? detail.ctx.text : '';
+    var ctx = detail.ctx || {};
+    var headers = (ctx.request && ctx.request.headers) ? ctx.request.headers : {};
+    var isBoosted = Boolean(ctx.boosted) ||
+      (typeof headers.get === 'function' ? headers.get('HX-Boosted') === 'true' : headers['HX-Boosted'] === 'true');
+    var hasSelect = Boolean(ctx.select);
+    var targetTag = (ctx.target && ctx.target.tagName) ? ctx.target.tagName.toLowerCase() : '';
+    if (isBoosted || hasSelect || targetTag === 'body' || targetTag === 'html') {
+      return;
+    }
 
-    if (!responseText) return;
+    var responseText = (typeof ctx.text === 'string') ? ctx.text : '';
+
+    if (!responseText) {
+      return;
+    }
 
     var txt = responseText.trim().toLowerCase();
     var looksLikeFullDoc =
@@ -16,7 +28,9 @@ document.addEventListener('htmx:before:swap', function (evt) {
       txt.indexOf('<html') !== -1 ||
       (txt.indexOf('<head') !== -1 && txt.indexOf('<body') !== -1);
 
-    if (!looksLikeFullDoc) return;
+    if (!looksLikeFullDoc) {
+      return;
+    }
 
     evt.preventDefault();
 

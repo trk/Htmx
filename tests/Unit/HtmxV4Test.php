@@ -57,6 +57,18 @@ if (!class_exists('HtmxV4TestDummyUi')) {
 	}
 }
 
+if (!class_exists('HtmxV4TestSiblingComponent')) {
+	class HtmxV4TestSiblingComponent extends Component
+	{
+		public string $title = 'sibling-default';
+
+		public function render(): string
+		{
+			return "<aside data-title='{$this->title}'>{$this->renderStatePayload()}</aside>";
+		}
+	}
+}
+
 if (!function_exists('resetHtmxTestState')) {
 	function resetHtmxTestState(): void
 	{
@@ -68,11 +80,11 @@ if (!function_exists('resetHtmxTestState')) {
 		$_POST = [];
 		$_GET = [];
 		$_SERVER['REQUEST_METHOD'] = 'GET';
-		wire('input')->post->removeAll();
-		wire('input')->get->removeAll();
+		wire()->input->post->removeAll();
+		wire()->input->get->removeAll();
 
 		/** @var Htmx|null $htmx */
-		$htmx = wire('htmx');
+		$htmx = wire()->htmx;
 		if ($htmx) {
 			$htmx->response->reset();
 			$htmx->fragment->clear();
@@ -134,7 +146,7 @@ describe('Totoglu\Htmx\Request (HTMX v4)', function (): void {
 		$_SERVER['HTTP_HX_REQUEST'] = 'true';
 		$_SERVER['HTTP_HX_SOURCE'] = 'button';
 		$_SERVER['REQUEST_METHOD'] = 'POST';
-		wire('input')->post->__htmx_action = 'publishItem';
+		wire()->input->post->__htmx_action = 'publishItem';
 
 		$req = new Request();
 
@@ -294,7 +306,7 @@ describe('Totoglu\Htmx\Ui & Bags (HTMX v4)', function (): void {
 describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function (): void {
 	it('dehydrates, signs, hydrates, and executes GET query* actions and POST __htmx_action mutations', function (): void {
 		/** @var Htmx $htmx */
-		$htmx = wire('htmx');
+		$htmx = wire()->htmx;
 		$htmx->registerComponent('DummyCounter', HtmxV4TestDummyComponent::class);
 
 		$cmp = new HtmxV4TestDummyComponent();
@@ -311,24 +323,24 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		// 1. Test GET query* action via handleEndpoint
 		$_SERVER['HTTP_HX_REQUEST'] = 'true';
 		$_SERVER['REQUEST_METHOD'] = 'GET';
-		wire('input')->get->hx__state = $signedPayload;
-		wire('input')->get->__htmx_action = 'querySummary';
-		wire('input')->get->prefix = 'Snapshot';
+		wire()->input->get->hx__state = $signedPayload;
+		wire()->input->get->__htmx_action = 'querySummary';
+		wire()->input->get->prefix = 'Snapshot';
 
 		$event = new HookEvent();
 		$out = $htmx->handleEndpoint($event);
 		expect($out)->toBe("<span class='summary'>Snapshot: 7 (start)</span>");
 
 		// 2. Test GET non-query action is rejected (no mutation occurred)
-		wire('input')->get->__htmx_action = 'increment';
-		wire('input')->get->step = '5';
+		wire()->input->get->__htmx_action = 'increment';
+		wire()->input->get->step = '5';
 		$outRejected = $htmx->handleEndpoint($event);
 		expect($outRejected)->toContain('data-count=\'7\'');
 	});
 
 	it('returns proper HTTP status codes for missing, malformed, tampered, and expired state payloads', function (): void {
 		/** @var Htmx $htmx */
-		$htmx = wire('htmx');
+		$htmx = wire()->htmx;
 		$htmx->registerComponent('DummyCounter', HtmxV4TestDummyComponent::class);
 		$_SERVER['HTTP_HX_REQUEST'] = 'true';
 		$_SERVER['REQUEST_METHOD'] = 'GET';
@@ -340,12 +352,12 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		expect($resMissing)->toContain('Missing HTMX State Payload');
 
 		// Malformed state -> 400
-		wire('input')->get->hx__state = 'not-a-valid-payload';
+		wire()->input->get->hx__state = 'not-a-valid-payload';
 		$resMalformed = $htmx->handleEndpoint($event);
 		expect($resMalformed)->toContain('Malformed HTMX State Payload');
 
 		// Tampered HMAC -> 403
-		wire('input')->get->hx__state = base64_encode('{"__cmp":"HtmxV4TestDummyComponent"}') . '|badhash';
+		wire()->input->get->hx__state = base64_encode('{"__cmp":"HtmxV4TestDummyComponent"}') . '|badhash';
 		$resBadHmac = $htmx->handleEndpoint($event);
 		expect($resBadHmac)->toContain('Invalid HTMX State Signature');
 
@@ -353,8 +365,36 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		$cmp = new HtmxV4TestDummyComponent();
 		$expiredStateHtml = $cmp->renderStatePayload(-1);
 		preg_match('/name="hx__state"\s+value="([^"]+)"/', $expiredStateHtml, $m);
-		wire('input')->get->hx__state = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+		wire()->input->get->hx__state = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
 		$resExpired = $htmx->handleEndpoint($event);
 		expect($resExpired)->toContain('HTMX State Payload Expired');
+	});
+
+	it('isolates sibling components and multi-instance IDs in renderComponent() when hx__state is present', function (): void {
+		/** @var Htmx $htmx */
+		$htmx = wire()->htmx;
+
+		$cmpA = new HtmxV4TestDummyComponent();
+		$cmpA->fill(['id' => 'alpha', 'count' => 12, 'label' => 'alpha-state']);
+		preg_match('/name="hx__state"\s+value="([^"]+)"/', $cmpA->renderStatePayload(), $m);
+		$signedAlpha = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+		$_SERVER['HTTP_HX_REQUEST'] = 'true';
+		$_SERVER['REQUEST_METHOD'] = 'GET';
+		wire()->input->get->hx__state = $signedAlpha;
+
+		// Sibling of different class must render cleanly without hydration error
+		$siblingOut = $htmx->renderComponent(HtmxV4TestSiblingComponent::class, ['title' => 'safe-sibling']);
+		expect($siblingOut)->toContain("data-title='safe-sibling'");
+
+		// Same class with different explicit id must not overwrite its props from alpha's hx__state
+		$betaOut = $htmx->renderComponent(HtmxV4TestDummyComponent::class, ['id' => 'beta', 'count' => 1, 'label' => 'beta-init']);
+		expect($betaOut)->toContain("data-count='1'")
+			->and($betaOut)->toContain("data-label='beta-init'");
+
+		// Matching class and explicit id hydrates alpha's state
+		$alphaOut = $htmx->renderComponent(HtmxV4TestDummyComponent::class, ['id' => 'alpha', 'count' => 0, 'label' => 'alpha-init']);
+		expect($alphaOut)->toContain("data-count='12'")
+			->and($alphaOut)->toContain("data-label='alpha-state'");
 	});
 });

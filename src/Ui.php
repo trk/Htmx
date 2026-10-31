@@ -55,7 +55,7 @@ abstract class Ui
 	 */
 	public function __construct(array|ParameterBag $parameters = [], array|AttributeBag $attributes = [])
 	{
-		$htmx = wire('htmx');
+		$htmx = wire()->htmx;
 		$this->htmx = $htmx instanceof Htmx ? $htmx : null;
 
 		$this->parameters = $parameters instanceof ParameterBag
@@ -563,7 +563,7 @@ abstract class Ui
 			$this->afterRender($html);
 			return $html;
 		} catch (\Throwable $e) {
-			$config = wire('config');
+			$config = wire()->config;
 			if ($config !== null && $config->debug) {
 				return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>" . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p></div>";
 			}

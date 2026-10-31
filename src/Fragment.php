@@ -124,15 +124,7 @@ class Fragment extends WireData
 
 		if ($strictSwap || $htmx === null) {
 			if (!$this->isValidSwapStyle($swapStyle)) {
-				$config = $this->wire()->config;
-				if ($config !== null && $config->debug) {
-					$log = $this->wire()->log;
-					if ($log !== null) {
-						$log->warning(
-							'HTMX OOB strict-swap rejected invalid swapStyle: ' . $swapStyle
-						);
-					}
-				}
+				$this->logDebugWarning('HTMX OOB strict-swap rejected invalid swapStyle: ' . $swapStyle);
 				$swapStyle = 'outerHTML';
 			}
 		}
@@ -142,13 +134,7 @@ class Fragment extends WireData
 				? (bool) preg_match('/^#[A-Za-z][A-Za-z0-9\-_:.]*$/', $selector)
 				: $this->isValidHtmlId($rawId);
 			if (!$isStrictIdSelector) {
-				$config = $this->wire()->config;
-				if ($config !== null && $config->debug) {
-					$log = $this->wire()->log;
-					if ($log !== null) {
-						$log->warning('HTMX OOB strict mode rejected selector: ' . $selector);
-					}
-				}
+				$this->logDebugWarning('HTMX OOB strict mode rejected selector: ' . $selector);
 				return $this;
 			}
 		}
@@ -166,8 +152,8 @@ class Fragment extends WireData
 		} else {
 			$wrapped = sprintf(
 				'<div id="%s" hx-swap-oob="%s">%s</div>',
-				htmlentities($id, ENT_QUOTES, 'UTF-8'),
-				htmlentities($swapStyle, ENT_QUOTES, 'UTF-8'),
+				htmlspecialchars($id, ENT_QUOTES, 'UTF-8'),
+				htmlspecialchars($swapStyle, ENT_QUOTES, 'UTF-8'),
 				$html
 			);
 		}
@@ -204,13 +190,7 @@ class Fragment extends WireData
 		}
 
 		if ($strictSwap && !$this->isValidSwapStyle($swap)) {
-			$config = $this->wire()->config;
-			if ($config !== null && $config->debug) {
-				$log = $this->wire()->log;
-				if ($log !== null) {
-					$log->warning('HTMX Partial strict-swap rejected invalid swap style: ' . $swap);
-				}
-			}
+			$this->logDebugWarning('HTMX Partial strict-swap rejected invalid swap style: ' . $swap);
 			$swap = 'outerMorph';
 		}
 
@@ -253,6 +233,14 @@ class Fragment extends WireData
 	}
 
 	/**
+	 * Return the total number of queued OOB swaps and `<hx-partial>` elements.
+	 */
+	public function count(): int
+	{
+		return count($this->oobSwaps) + count($this->partials);
+	}
+
+	/**
 	 * Clear queued OOB swaps and <hx-partial> elements.
 	 */
 	public function clear(): self
@@ -284,5 +272,16 @@ class Fragment extends WireData
 		);
 
 		return $this;
+	}
+
+	private function logDebugWarning(string $message): void
+	{
+		$config = $this->wire()->config;
+		if ($config !== null && $config->debug) {
+			$log = $this->wire()->log;
+			if ($log !== null) {
+				$log->warning($message);
+			}
+		}
 	}
 }

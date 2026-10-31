@@ -16,12 +16,21 @@ use function ProcessWire\wire;
 
 class MakeHtmxComponentCommand extends Command
 {
+	protected string $commandName = 'make:htmx:component';
+	protected string $commandDescription = 'Scaffold a new Htmx Component.';
+	protected string $elementLabel = 'Component';
+	protected string $argumentDescription = 'The name of the Component (e.g. Counter or Dashboard/Counter)';
+	protected string $configProperty = 'componentsPath';
+	protected string $defaultDir = 'components';
+	protected string $rootNamespace = 'Htmx\\Component';
+	protected string $stubFilename = 'htmx-component.stub';
+
 	protected function configure(): void
 	{
 		$this
-			->setName('make:htmx:component')
-			->setDescription('Scaffold a new Htmx Component.')
-			->addArgument('name', InputArgument::REQUIRED, 'The name of the Component (e.g. Counter or Dashboard/Counter)')
+			->setName($this->commandName)
+			->setDescription($this->commandDescription)
+			->addArgument('name', InputArgument::REQUIRED, $this->argumentDescription)
 			->addOption('dir', 'd', InputOption::VALUE_REQUIRED, 'Relative path under site/ directory to store the element (overrides module settings)');
 	}
 
@@ -32,12 +41,13 @@ class MakeHtmxComponentCommand extends Command
 		$className = (string) array_pop($parts);
 		$subDirs = implode('/', $parts);
 
-		// Get module config
-		$htmxModule = wire('modules')->get('Htmx');
+		$modules = wire()->modules;
+		$htmxModule = $modules ? $modules->get('Htmx') : null;
 		$baseDir = $input->getOption('dir');
 
 		if (!$baseDir) {
-			$baseDir = $htmxModule ? trim((string) ($htmxModule->componentsPath ?: 'components/'), '/') : 'components';
+			$configuredPath = $htmxModule ? (string) ($htmxModule->{$this->configProperty} ?: $this->defaultDir . '/') : $this->defaultDir;
+			$baseDir = trim($configuredPath, '/');
 		} else {
 			$baseDir = trim((string) $baseDir, '/');
 			if (str_starts_with($baseDir, 'site/')) {
@@ -45,30 +55,27 @@ class MakeHtmxComponentCommand extends Command
 			}
 		}
 
-		// Full directory path
-		$sitePath = rtrim((string) wire('config')->paths->site, '/');
+		$sitePath = rtrim((string) wire()->config->paths->site, '/');
 		$targetDir = $sitePath . '/' . ltrim($baseDir, '/') . ($subDirs !== '' ? '/' . ltrim($subDirs, '/') : '');
 		$targetFile = $targetDir . '/' . $className . '.php';
 
 		if (file_exists($targetFile)) {
-			error("Component '{$className}' already exists at {$targetFile}");
+			error("{$this->elementLabel} '{$className}' already exists at {$targetFile}");
 			return Command::FAILURE;
 		}
 
-		// Determine Namespace
-		$namespace = 'Htmx\\Component';
+		$namespace = $this->rootNamespace;
 		if ($subDirs !== '') {
 			$namespace .= '\\' . str_replace('/', '\\', $subDirs);
 		}
 
-		// Slugging logic for element IDs or general usage
 		$slug = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '-$0', $className));
 
 		if (!is_dir($targetDir)) {
 			mkdir($targetDir, 0755, true);
 		}
 
-		$stubPath = __DIR__ . '/stubs/htmx-component.stub';
+		$stubPath = __DIR__ . '/stubs/' . $this->stubFilename;
 		if (!file_exists($stubPath)) {
 			error("Stub file not found at {$stubPath}");
 			return Command::FAILURE;
@@ -82,7 +89,7 @@ class MakeHtmxComponentCommand extends Command
 		);
 
 		file_put_contents($targetFile, $content);
-		info("Htmx Component '{$className}' scaffolded successfully at:");
+		info("Htmx {$this->elementLabel} '{$className}' scaffolded successfully at:");
 		note(str_replace($sitePath, 'site/', $targetFile));
 
 		return Command::SUCCESS;

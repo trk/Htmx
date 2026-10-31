@@ -2,7 +2,7 @@
 name: pw-htmx
 description: Use when working with Totoglu\Htmx Components, Ui elements, HTMX 4 swaps, <hx-partial> elements, OOB fragments, deferred triggers, or signed state payload management in the ProcessWire server-driven component model. ALWAYS activates for any Totoglu\Htmx or htmx-related code generation in this project.
 metadata:
-  version: 200
+  version: 210
   htmx-version: 4
   processwire-version: ">=3.0.271"
   php-version: ">=8.4"
@@ -21,9 +21,9 @@ metadata:
     - deferred trigger
 ---
 
-# ProcessWire HTMX 4 Integration & State-Aware UI (pw-htmx skill v200)
+# ProcessWire HTMX 4 Integration & State-Aware UI (pw-htmx skill v210)
 
-This skill set operates strictly atop the customized **`Totoglu\Htmx`** v200+ modular architecture present in the host project. It is calibrated **exclusively for HTMX 4** — any legacy v2/v3 htmx pattern must be translated before output.
+This skill set operates strictly atop the customized **`Totoglu\Htmx`** v210+ modular architecture present in the host project. It is calibrated **exclusively for HTMX 4** — any legacy v2/v3 htmx pattern must be translated before output.
 
 Treat this module as a **server-driven UI layer for ProcessWire powered by HTMX 4**:
 
@@ -36,11 +36,10 @@ Do **not** copy assumptions from other component frameworks; use this module's o
 
 ## Required HTMX 4 References
 
-Before changing HTMX semantics, consult these local capability documents first:
+Before changing HTMX semantics, consult the canonical module reference and source classes first:
 
-- `/Users/iskender/Downloads/boost/skills/htmx-guidance.md`
-- `/Users/iskender/Downloads/boost/skills/htmx-debugging.md`
-- `/Users/iskender/Downloads/boost/skills/htmx-extension-authoring.md`
+- `site/modules/Htmx/AGENTS.md`
+- `site/modules/Htmx/src/Component.php`, `Ui.php`, `Request.php`, `Response.php`, `Fragment.php`
 
 Use them to understand HTMX 4 itself, then adapt the result to the ProcessWire PHP-first component contract in this repository.
 
@@ -51,7 +50,7 @@ This table is **non-negotiable**. If any code you generate falls in the "Old" co
 | Old (v2/v3, DO NOT emit)                                    | New (HTMX 4, ALWAYS emit)                                                                | Notes                                                           |
 | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `hx-post`, `hx-get`, `hx-put`, `hx-delete`                  | `hx-action="<url>" hx-method="post\|get\|..."`                                           | Separate action URL from HTTP verb                              |
-| `hx-swap="outerHTML"`                                       | `hx-swap="outerMorph"` (or `outerHTML` compat)                                           | Morph swaps are preferred in v4                                 |
+| `hx-swap="outerHTML"`                                       | `hx-swap="outerMorph"` (or `outerSync` / `outerHTML` compat)                             | Morph/sync swaps are preferred in v4                            |
 | `hx-swap="innerHTML"`                                       | `hx-swap="innerMorph"` (or `innerHTML` compat)                                           |                                                                 |
 | N/A                                                         | `hx-swap="textContent"`                                                                  | Plain text only, no HTML parsing (v4 NEW)                       |
 | N/A                                                         | `hx-swap="delete"`                                                                       | Remove target after response (v4 NEW)                           |
@@ -425,9 +424,6 @@ Use the `--dir` option if placing elements outside the default `site/components`
 - `site/modules/Htmx` (Heavily engaging the internal routing of `Totoglu\Htmx\Component` and `Totoglu\Htmx\Ui`).
   - **Always read** [AGENTS.md](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/AGENTS.md) inside the module before authoring non-trivial components — it contains the canonical method signatures and anti-pattern list.
 - UIkit 3 (The default UI framework utilized). As HTMX DOM integrations do NOT repeatedly fire `DOMContentLoaded`, asynchronous UIkit elements requiring JS initialization (uk-modal, uk-accordion) must be structured relative to HTMX v4 `htmx:after:settle` events (colon-format, NOT `htmx:afterSettle`).
-- `/Users/iskender/Downloads/boost/skills/htmx-guidance.md` for HTMX 4 attributes, inheritance, events, swaps, and config.
-- `/Users/iskender/Downloads/boost/skills/htmx-debugging.md` for runtime diagnostics and migration gotchas.
-- `/Users/iskender/Downloads/boost/skills/htmx-extension-authoring.md` for extension hooks and `detail.ctx` internals.
 - `site/modules/Htmx/src/Request.php`, `Response.php`, `Fragment.php`, `Ui.php`, `Component.php` are the five authoritative source-of-truth classes for API signatures; never hallucinate method names beyond what these files declare.
 
 ## Copy-Paste Prompts
@@ -440,7 +436,7 @@ Use the `--dir` option if placing elements outside the default `site/components`
 
 **[Stateful Component Generation - HTMX 4 TodoList with <hx-partial>]**
 
-> "Build a robust component extending `Component/TodoList.php`. Institute public synchronization arrays structured identically to `array{id: int, task: string, done: bool}`. Bind `addTask` and `toggleTask` POST mutation actions + a `queryFilterDone` idempotent GET query\* method. Map actions correctly through specific `__htmx_action` submit buttons (use actionTrigger() helper for the Button Ui, legacy `hx__action` is FORBIDDEN). Include the `$this->renderStatePayload()` guard inside the core `<form hx-action... hx-method=post hx-swap=outerMorph>`. After each mutation, fire `triggerAfterSwap('listChanged')` deferred event AND emit a `<hx-partial id='#todo-stats'>` using `addPartial()` to update a page-level stats badge. Pair with `hx-status:422='swap:outerMorph target:#todo-list'`."
+> "Build a robust component extending `Component/TodoList.php`. Institute public synchronization arrays structured identically to `array{id: int, task: string, done: bool}`. Bind `addTask` and `toggleTask` POST mutation actions + a `queryFilterDone` idempotent GET query\* method. Map actions correctly through specific `__htmx_action` submit buttons (use actionTrigger() helper for the Button Ui, legacy `hx__action` is FORBIDDEN). Include the `$this->renderStatePayload()` guard inside the core `<form hx-action... hx-method=post hx-swap=outerMorph>`. After each mutation, fire `triggerAfterSwap('listChanged')` deferred event AND emit a `<hx-partial hx-target='#todo-stats'>` using `addPartial()` to update a page-level stats badge. Pair with `hx-status:422='swap:outerMorph target:#todo-list'`."
 
 ## Core Anti-Patterns to Avoid (fail-fast list)
 

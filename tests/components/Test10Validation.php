@@ -45,10 +45,10 @@ class Test10Validation extends Component
 
 				<div class='uk-margin'>
 					<input class='uk-input" . ($this->error !== '' ? ' uk-form-danger' : '') . "'
-					       type='email'
-					       name='email'
-					       placeholder='Enter Email'
-					       value='" . htmlspecialchars($this->email, ENT_QUOTES, 'UTF-8') . "'>
+						type='email'
+						name='email'
+						placeholder='Enter Email'
+						value='" . htmlspecialchars($this->email, ENT_QUOTES, 'UTF-8') . "'>
 				</div>
 
 				<button type='submit' name='__htmx_action' value='subscribe' class='uk-button uk-button-primary'>Subscribe</button>

@@ -16,13 +16,9 @@ Do **NOT** import assumptions from other component frameworks. This module has i
 
 ## 0. Required HTMX 4 Reference Material
 
-Before changing request flow, swaps, events, inheritance, extensions, or debugging behavior, consult the local HTMX 4 capability docs in `/Users/iskender/Downloads/boost/skills`:
+Before changing request flow, swaps, events, inheritance, extensions, or debugging behavior, consult the module's canonical source files in `site/modules/Htmx/src/` (`Component.php`, `Ui.php`, `Request.php`, `Response.php`, `Fragment.php`) and `.agents/skills/pw-htmx/SKILL.md`.
 
-- `htmx-guidance.md`: core attributes, swaps, inheritance, config, events, and request model.
-- `htmx-debugging.md`: diagnostic workflow, status-code swap behavior, OOB/partial ordering, and runtime debugging.
-- `htmx-extension-authoring.md`: extension hooks, `detail.ctx`, `registerExtension()`, and custom swap internals.
-
-Use those documents as the canonical HTMX 4 mental model, then adapt the solution to this module's PHP-first architecture.
+Use those references as the canonical HTMX 4 mental model, then adapt the solution to this module's PHP-first architecture.
 
 ## 0.1. HTMX 4 Breaking Changes Applied by This Module
 
@@ -407,7 +403,7 @@ $frag->getOobSwaps('<!-- main response -->');
 ### Valid Swap Styles (HTMX v4) — used in `hx-swap`, `reswap()`, `addPartial(swap: ...)`, etc.
 
 The module validates these against the following list (case-insensitive):
-- **Morph swaps (recommended v4):** `innerMorph`, `outerMorph`
+- **Morph & sync swaps (recommended v4):** `innerMorph`, `outerMorph`, `outerSync`
 - **Classic swaps:** `innerHTML` (alias: `innerHtml`), `outerHTML` (alias: `outerHtml`)
 - **v4 NEW:** `textContent` (plain text only, no HTML parsing), `delete` (removes target after response consumed)
 - **Position swaps:** `beforebegin` (alias: `before`), `afterbegin` (alias: `prepend`), `beforeend` (alias: `append`), `afterend` (alias: `after`)

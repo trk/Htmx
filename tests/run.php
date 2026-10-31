@@ -17,8 +17,8 @@ use Htmx\Component\Test10Validation;
 
 $pageID = null;
 
-$htmx = wire('htmx');
-$pages = wire('pages');
+$htmx = wire()->htmx;
+$pages = wire()->pages;
 
 $output = "<div class='uk-container uk-margin-large-top uk-margin-large-bottom'>";
 $output .= "<h2>ProcessWire HTMX Experimental Test Suite</h2>";

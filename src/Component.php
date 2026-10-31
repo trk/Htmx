@@ -75,6 +75,11 @@ abstract class Component extends WireData
 	private ?string $actionResponse = null;
 
 	/**
+	 * @var bool Whether `$this->id` was explicitly provided via `fill()` or `setId()`
+	 */
+	private bool $hasExplicitId = false;
+
+	/**
 	 * Inject a pre-verified state payload from the endpoint dispatcher to avoid redundant HMAC/JSON work.
 	 *
 	 * @param array<string, mixed>|null $decoded
@@ -114,6 +119,18 @@ abstract class Component extends WireData
 	}
 
 	/**
+	 * Explicitly set a deterministic component instance ID for multi-instance pages.
+	 */
+	public function setId(string $id): self
+	{
+		if ($id !== '') {
+			$this->id = $id;
+			$this->hasExplicitId = true;
+		}
+		return $this;
+	}
+
+	/**
 	 * Helper to mass-assign properties to the component.
 	 * Uses type coercion for strict_types compatibility with public typed properties.
 	 *
@@ -121,6 +138,9 @@ abstract class Component extends WireData
 	 */
 	public function fill(array $props): self
 	{
+		if (isset($props['id']) && is_scalar($props['id']) && (string) $props['id'] !== '') {
+			$this->hasExplicitId = true;
+		}
 		$ref = self::getReflection();
 		foreach ($props as $k => $v) {
 			if ($ref->hasProperty($k)) {
@@ -287,14 +307,56 @@ abstract class Component extends WireData
 	public function mount(): void {}
 
 	/**
+	 * Check whether the current request either carries no state payload for `$this->stateKey`
+	 * or carries a signed state payload belonging to `static::class`.
+	 * Used by `Htmx::renderComponent()` so sibling components on multi-component pages
+	 * do not fail when another component's `hx__state` is submitted.
+	 */
+	public function matchesRequestState(): bool
+	{
+		$input = $this->wire()->input;
+		if ($input === null) {
+			return true;
+		}
+
+		$payload = $input->post($this->stateKey);
+		if ($payload === null || $payload === '' || $payload === false) {
+			$payload = $input->get($this->stateKey);
+		}
+		if ($payload === null || $payload === '' || $payload === false) {
+			return true;
+		}
+
+		$candidates = is_array($payload) ? $payload : [$payload];
+		foreach ($candidates as $candidate) {
+			if (!is_string($candidate) || $candidate === '') {
+				continue;
+			}
+			try {
+				$decoded = self::decodeSignedPayload($candidate, $this->getHmacSalt());
+				if (($decoded['__cmp'] ?? null) !== static::class) {
+					continue;
+				}
+				if ($this->hasExplicitId && isset($decoded['__id']) && (string) $decoded['__id'] !== $this->id) {
+					continue;
+				}
+				$this->preDecodedState = $decoded;
+				return true;
+			} catch (\Throwable) {
+				return false;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Call this inside your component script/render block to restore state
 	 * from the incoming HTMX request before processing logic.
 	 *
 	 * HTMX v4 note: GET / QUERY requests also carry state for read-only actions.
-	 *
-	 * @param int $ttlHours Default is 24 hours. Payload expires after this time.
 	 */
-	public function hydrate(int $ttlHours = 24): void
+	public function hydrate(): void
 	{
 		$decoded = $this->preDecodedState;
 		$this->preDecodedState = null;
@@ -431,17 +493,22 @@ abstract class Component extends WireData
 
 		$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 		$isPost = ($method === 'POST');
+		$isQueryMethod = ($method === 'QUERY');
 
-		$action = $isPost ? $input->post($actionParam) : $input->get($actionParam);
+		$action = $isPost
+			? $input->post($actionParam)
+			: ($isQueryMethod ? ($input->post($actionParam) ?? $input->get($actionParam)) : $input->get($actionParam));
 		if ((!$action || !is_string($action)) && $actionParam !== '__htmx_action') {
-			$action = $isPost ? $input->post('__htmx_action') : $input->get('__htmx_action');
+			$action = $isPost
+				? $input->post('__htmx_action')
+				: ($isQueryMethod ? ($input->post('__htmx_action') ?? $input->get('__htmx_action')) : $input->get('__htmx_action'));
 		}
 
 		if (!$action || !is_string($action) || $action === '') {
 			return false;
 		}
 
-		// Security: state mutations MUST be POST; GET can only run query* methods.
+		// Security: state mutations MUST be POST; GET/QUERY can only run query* methods.
 		$isQueryAction = stripos($action, 'query') === 0;
 		if (!$isPost && !$isQueryAction) {
 			return false;
@@ -480,13 +547,15 @@ abstract class Component extends WireData
 				if (str_starts_with($className, 'ProcessWire\\')) {
 					$shortName = substr(strrchr('\\' . $className, '\\'), 1);
 					$apiName = strtolower($shortName);
-					$apiVal = $this->wire($apiName);
+					$apiVal = $this->wire()->get($apiName);
 					if (is_object($apiVal) && is_a($apiVal, $className)) {
 						$val = $apiVal;
 					}
 				}
 			} else {
-				$rawVal = $isPost ? $input->post($name) : $input->get($name);
+				$rawVal = $isPost
+					? $input->post($name)
+					: ($isQueryMethod ? ($input->post($name) ?? $input->get($name)) : $input->get($name));
 				if ($rawVal !== null) {
 					$val = $this->coerceValue($rawVal, $type);
 				}
@@ -501,10 +570,7 @@ abstract class Component extends WireData
 
 		$result = $methodRef->invokeArgs($this, $args);
 		if (is_string($result) && $result !== '') {
-			$this->view = $result;
-			if (!str_ends_with($result, '.php')) {
-				$this->actionResponse = $result;
-			}
+			$this->actionResponse = $result;
 		}
 
 		return true;
@@ -519,6 +585,8 @@ abstract class Component extends WireData
 	{
 		$state = [];
 		$ref = self::getReflection();
+		$config = $this->wire()->config;
+		$log = $this->wire()->log;
 		foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
 			$name = $prop->getName();
 			if (!$prop->isInitialized($this)) {
@@ -538,12 +606,8 @@ abstract class Component extends WireData
 					continue;
 				}
 
-				$config = $this->wire()->config;
-				if ($config && $config->debug) {
-					$log = $this->wire()->log;
-					if ($log) {
-						$log->warning("Component State: Unrecognized Object Type (" . get_class($val) . ") for property '{$name}' cannot be dehydrated securely.");
-					}
+				if ($config && $config->debug && $log) {
+					$log->warning("Component State: Unrecognized Object Type (" . get_class($val) . ") for property '{$name}' cannot be dehydrated securely.");
 				}
 				continue;
 			}
@@ -564,6 +628,7 @@ abstract class Component extends WireData
 	private function mapStateToProperties(array $state): void
 	{
 		$ref = self::getReflection();
+		$pages = $this->wire()->pages;
 		foreach ($state as $k => $v) {
 			if (is_string($k) && str_starts_with($k, '__')) {
 				continue;
@@ -574,7 +639,6 @@ abstract class Component extends WireData
 				if ($prop->isPublic()) {
 					// 1. ProcessWire Object Synthesis (Hydration)
 					if (is_array($v) && isset($v['__wire_model'])) {
-						$pages = $this->wire()->pages;
 						if ($pages === null) {
 							continue;
 						}
@@ -722,15 +786,7 @@ abstract class Component extends WireData
 	public function __toString(): string
 	{
 		try {
-			if (!$this->renderReady()) {
-				return '';
-			}
-
-			$this->beforeRender();
-			$html = $this->actionResponse ?? $this->render();
-			$this->afterRender($html);
-
-			return $html;
+			return $this->renderToString();
 		} catch (\Throwable $e) {
 			$config = $this->wire()->config;
 			if ($config && $config->debug) {
