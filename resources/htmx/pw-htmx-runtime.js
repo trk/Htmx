@@ -44,31 +44,45 @@
     });
   }
 
-  function dispatchAfter(lifecycleEventName, eventMap, fallbackDelay) {
+  // In HTMX v4, #handleTriggerHeader runs in the request `finally` block after `await this.swap(ctx)`
+  // has already completed swap and settle. We schedule __pwHtmxAfterSwap immediately on the microtask queue
+  // and __pwHtmxAfterSettle on the next animation frame / macrotask, while cleaning up any lifecycle
+  // listener so no listener ever leaks across requests.
+  function dispatchAfter(lifecycleEventName, eventMap, useNextFrame) {
     var fired = false;
+    var timerId = null;
 
     function run() {
       if (fired) return;
       fired = true;
+      document.removeEventListener(lifecycleEventName, run);
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
       dispatchEvents(eventMap);
     }
 
     document.addEventListener(lifecycleEventName, run, { once: true });
-    window.setTimeout(run, fallbackDelay);
+
+    if (useNextFrame && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(function () {
+        timerId = window.setTimeout(run, 0);
+      });
+    } else {
+      timerId = window.setTimeout(run, 0);
+    }
   }
 
-  // HTMX v4 emits the synthetic event names we put in HX-Trigger immediately when headers arrive.
-  // We then replay the user's events at the correct lifecycle phase (after swap / settle).
   document.addEventListener('__pwHtmxAfterSwap', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
-    dispatchAfter('htmx:after:swap', eventMap, 0);
+    dispatchAfter('htmx:after:swap', eventMap, false);
   });
 
   document.addEventListener('__pwHtmxAfterSettle', function (evt) {
     var eventMap = getDeferredEvents(evt);
     if (!eventMap) return;
-    dispatchAfter('htmx:after:settle', eventMap, 50);
+    dispatchAfter('htmx:after:settle', eventMap, true);
   });
 
   function syncPwHtmxInputfieldConfig(root) {
@@ -116,24 +130,62 @@
       }
     }
 
-    var initTarget = (root && root.nodeType === 1) ? root : document.body;
-    if (foundConfig || (initTarget && initTarget.querySelector && initTarget.querySelector('.Inputfield, .Inputfields'))) {
+    var initTarget = (root && root.nodeType === 1 && root !== document.body && root !== document.documentElement) ? root : null;
+    if (initTarget && (foundConfig || (initTarget.querySelector && initTarget.querySelector('.Inputfield, .Inputfields')))) {
       if (window.Inputfields && typeof window.Inputfields.init === 'function') {
         try {
           window.Inputfields.init(initTarget);
         } catch (e) {}
       }
-      if (window.jQuery && initTarget) {
+      if (window.jQuery) {
         try {
+          if (typeof window.setupLanguageTabs === 'function') {
+            var $initScope = window.jQuery(initTarget);
+            $initScope.find('.langTabs').each(function () {
+              var $lt = window.jQuery(this);
+              var $ul = $lt.children('ul');
+              if ($ul.length && $ul.attr('uk-tab') !== undefined) {
+                $ul.addClass('uk-tab');
+              }
+              if (!$lt.children('.LanguageSupport.LanguageSupportCurrent').length || !$ul.find('li.uk-active').length) {
+                $lt.removeClass('langTabsInit');
+                $lt.find('a.langTabLink, a[data-lang]').off('mouseover mouseout click');
+              }
+            });
+            window.setupLanguageTabs($initScope);
+          }
           window.jQuery(initTarget).trigger('reloaded', ['htmx']);
         } catch (e) {}
       }
     }
   }
 
-  document.addEventListener('htmx:after:settle', function (evt) {
+  function resolveSettleTarget(evt) {
     var detail = (evt && evt.detail) || {};
-    var target = detail.target || (detail.ctx && detail.ctx.target) || evt.target || document;
-    syncPwHtmxInputfieldConfig(target);
+    if (detail.newContent && detail.newContent.length) {
+      for (var i = 0; i < detail.newContent.length; i++) {
+        if (detail.newContent[i] && detail.newContent[i].nodeType === 1 && detail.newContent[i].isConnected) {
+          return detail.newContent[i];
+        }
+      }
+    }
+    if (detail.target && detail.target.nodeType === 1 && detail.target.isConnected) {
+      return detail.target;
+    }
+    if (detail.task && detail.task.ctx && detail.task.ctx.target && detail.task.ctx.target.id) {
+      var byId = document.getElementById(detail.task.ctx.target.id);
+      if (byId) return byId;
+    }
+    if (evt && evt.target && evt.target !== document && evt.target.nodeType === 1 && evt.target.isConnected) {
+      return evt.target;
+    }
+    return null;
+  }
+
+  document.addEventListener('htmx:after:settle', function (evt) {
+    var target = resolveSettleTarget(evt);
+    if (target) {
+      syncPwHtmxInputfieldConfig(target);
+    }
   });
 })();

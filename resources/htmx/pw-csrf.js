@@ -1,6 +1,6 @@
 // PW Admin CSRF helper for HTMX v4
 // Reads ProcessWire.config.csrf and injects it into every non-GET HTMX request.
-// Uses the HTMX v4 ctx.request (fetch Request) object + evt.detail.parameters.
+// Uses the HTMX v4 ctx.request object (request.body FormData/URLSearchParams + request.headers).
 
 document.addEventListener('htmx:config:request', function (evt) {
   var ctx = evt.detail && evt.detail.ctx ? evt.detail.ctx : null;
@@ -43,19 +43,14 @@ document.addEventListener('htmx:config:request', function (evt) {
     return;
   }
 
-  // 1) Inject into htmx parameters (safest, works for all encodings)
-  if (evt.detail && evt.detail.parameters && typeof evt.detail.parameters === 'object') {
-    evt.detail.parameters[tokenName] = tokenValue;
-  }
-
-  // 2) Mutate the fetch Request body if it's already a FormData or URLSearchParams
+  // 1) Mutate the HTMX v4 request body (FormData or URLSearchParams)
   if (request.body instanceof FormData || (typeof URLSearchParams !== 'undefined' && request.body instanceof URLSearchParams)) {
     try {
       request.body.set(tokenName, tokenValue);
     } catch (ignore) {}
   }
 
-  // 3) Set X-Requested-With and ProcessWire's X-{tokenName} AJAX CSRF header
+  // 2) Set X-Requested-With and ProcessWire's X-{tokenName} AJAX CSRF header
   if (request.headers && typeof request.headers.set === 'function') {
     try {
       request.headers.set('X-Requested-With', 'XMLHttpRequest');
