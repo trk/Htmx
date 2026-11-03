@@ -966,7 +966,7 @@ HTML;
 
 		$wrapper->renderReady(null, $renderValueMode);
 		$hasLanguageFields = false;
-		foreach ($wrapper->getAll() as $inputfield) {
+		foreach ($wrapper->getAll(['withWrappers' => true]) as $inputfield) {
 			if ($inputfield instanceof InputfieldWrapper) {
 				$inputfield->set('columnWidthSpacing', $spacing);
 			}
