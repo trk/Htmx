@@ -381,15 +381,79 @@ abstract class Component extends WireData
 			// In some edge cases (e.g. multiple components within the same form),
 			// ProcessWire may provide the payload as an array.
 			if (is_array($payload)) {
-				$first = reset($payload);
-				$payload = is_string($first) ? $first : null;
+				$matchedCandidate = null;
+				try {
+					$salt = $this->getHmacSalt();
+					foreach ($payload as $candidate) {
+						if (!is_string($candidate) || $candidate === '') {
+							continue;
+						}
+						$candDecoded = self::decodeSignedPayload($candidate, $salt);
+						if (($candDecoded['__cmp'] ?? null) !== static::class) {
+							continue;
+						}
+						if ($this->hasExplicitId && isset($candDecoded['__id']) && (string) $candDecoded['__id'] !== $this->id) {
+							continue;
+						}
+						$matchedCandidate = $candidate;
+						break;
+					}
+				} catch (\Throwable) {
+				}
+				if ($matchedCandidate !== null) {
+					$payload = $matchedCandidate;
+				} else {
+					$first = reset($payload);
+					$payload = is_string($first) ? $first : null;
+				}
+			}
+
+			if ((!is_string($payload) || $payload === '') && $this->stateKey !== 'hx__state') {
+				$fallback = $input->post('hx__state') ?? $input->get('hx__state');
+				if (is_string($fallback) && $fallback !== '') {
+					try {
+						$candDecoded = self::decodeSignedPayload($fallback, $this->getHmacSalt());
+						if (
+							($candDecoded['__cmp'] ?? null) === static::class
+							&& (!$this->hasExplicitId || !isset($candDecoded['__id']) || (string) $candDecoded['__id'] === $this->id)
+						) {
+							$decoded = $candDecoded;
+							$payload = $fallback;
+						}
+					} catch (WireException $ex) {
+						throw $ex;
+					}
+				}
+			} elseif ((!is_string($payload) || $payload === '') && $this->stateKey === 'hx__state') {
+				$postBag = is_object($input->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : (is_array($_POST ?? null) ? $_POST : []);
+				$getBag = is_object($input->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : (is_array($_GET ?? null) ? $_GET : []);
+				foreach ([$postBag, $getBag] as $bag) {
+					foreach ($bag as $k => $v) {
+						if (!is_string($k) || !str_starts_with($k, 'hx__state__') || !is_string($v) || $v === '') {
+							continue;
+						}
+						try {
+							$candDecoded = self::decodeSignedPayload($v, $this->getHmacSalt());
+							if (
+								($candDecoded['__cmp'] ?? null) === static::class
+								&& (!$this->hasExplicitId || !isset($candDecoded['__id']) || (string) $candDecoded['__id'] === $this->id)
+							) {
+								$decoded = $candDecoded;
+								$payload = $v;
+								$this->stateKey = $k;
+								break 2;
+							}
+						} catch (\Throwable) {
+						}
+					}
+				}
 			}
 
 			if (!is_string($payload) || $payload === '') {
 				return;
 			}
 
-			$decoded = self::decodeSignedPayload($payload, $this->getHmacSalt());
+			$decoded ??= self::decodeSignedPayload($payload, $this->getHmacSalt());
 		} else {
 			if (isset($decoded['__expires']) && time() > (int) $decoded['__expires']) {
 				throw new WireException('HTMX State Expired: This payload is no longer valid (Replay Protection).', self::ERR_STATE_EXPIRED);

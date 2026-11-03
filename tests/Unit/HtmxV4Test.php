@@ -396,5 +396,18 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		$alphaOut = $htmx->renderComponent(HtmxV4TestDummyComponent::class, ['id' => 'alpha', 'count' => 0, 'label' => 'alpha-init']);
 		expect($alphaOut)->toContain("data-count='12'")
 			->and($alphaOut)->toContain("data-label='alpha-state'");
+
+		// Multi-instance hx__state[] array in handleEndpoint() matches target __id
+		$cmpB = new HtmxV4TestDummyComponent();
+		$cmpB->fill(['id' => 'beta', 'count' => 99, 'label' => 'beta-state']);
+		preg_match('/name="hx__state"\s+value="([^"]+)"/', $cmpB->renderStatePayload(), $mB);
+		$signedBeta = html_entity_decode($mB[1], ENT_QUOTES, 'UTF-8');
+
+		$_SERVER['HTTP_HX_TARGET'] = '#beta';
+		wire()->input->get->hx__state = [$signedAlpha, $signedBeta];
+		$event = new HookEvent();
+		$endpointOut = $htmx->handleEndpoint($event);
+		expect($endpointOut)->toContain("data-count='99'")
+			->and($endpointOut)->toContain("data-label='beta-state'");
 	});
 });

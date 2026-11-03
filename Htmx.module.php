@@ -382,10 +382,46 @@ HTML;
 		if (!$payload) {
 			$payload = $input->post('hx__state') ?? $input->get('hx__state');
 		}
+		if (!$payload) {
+			$postBag = is_object($input->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : (is_array($_POST ?? null) ? $_POST : []);
+			$getBag = is_object($input->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : (is_array($_GET ?? null) ? $_GET : []);
+			foreach ([$postBag, $getBag] as $bag) {
+				foreach ($bag as $k => $v) {
+					if (is_string($k) && str_starts_with($k, 'hx__state__') && is_string($v) && $v !== '') {
+						$payload = $v;
+						$payloadKey = $k;
+						if ($target && $k === 'hx__state__' . $target) {
+							break 2;
+						}
+					}
+				}
+			}
+		}
 
 		if (is_array($payload)) {
-			$first = reset($payload);
-			$payload = is_string($first) ? $first : '';
+			$matchedCandidate = null;
+			if ($target) {
+				try {
+					$candidateSalt = $this->getHmacSalt();
+					foreach ($payload as $candidate) {
+						if (!is_string($candidate) || $candidate === '') {
+							continue;
+						}
+						$candDecoded = Component::decodeSignedPayload($candidate, $candidateSalt);
+						if (($candDecoded['__id'] ?? null) === $target) {
+							$matchedCandidate = $candidate;
+							break;
+						}
+					}
+				} catch (\Throwable) {
+				}
+			}
+			if ($matchedCandidate !== null) {
+				$payload = $matchedCandidate;
+			} else {
+				$first = reset($payload);
+				$payload = is_string($first) ? $first : '';
+			}
 		}
 		if (!is_string($payload) || $payload === '') {
 			if ($log) {
