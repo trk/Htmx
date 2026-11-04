@@ -159,12 +159,12 @@ class AttributeBag extends ParameterBag
 		$html = [];
 		foreach ($this->all() as $key => $value) {
 			if ($value === true) {
-				$html[] = htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8');
+				$html[] = htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8', false);
 			} elseif ($value !== null && $value !== false) {
 				$html[] = sprintf(
 					'%s="%s"',
-					htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8'),
-					htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8')
+					htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8', false),
+					htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8', false)
 				);
 			}
 		}

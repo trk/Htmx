@@ -447,4 +447,53 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 			->toContain('dummyViewportSetting')
 			->and(str_ends_with(rtrim($out), '</div>'))->toBeTrue();
 	});
+
+	it('allows read-only query* UI actions in ProcessWire demo mode ($config->demo) while blocking state-mutating POST actions', function (): void {
+		/** @var Htmx $htmx */
+		$htmx = wire()->htmx;
+		$htmx->registerComponent('DummyCounter', HtmxV4TestDummyComponent::class);
+
+		$config = wire()->config;
+		$previousDemo = (bool) ($config->demo ?? false);
+		$previousCsrf = (bool) ($config->protectCSRF ?? true);
+		$config->demo = true;
+		$config->protectCSRF = false;
+
+		try {
+			$cmp = new HtmxV4TestDummyComponent();
+			$cmp->fill(['id' => 'demo-test', 'count' => 10, 'label' => 'demo-ready']);
+			preg_match('/name="hx__state"\s+value="([^"]+)"/', $cmp->renderStatePayload(), $m);
+			$signedState = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+			// 1. Read-only query* action (even over POST) works normally in demo mode
+			$_SERVER['HTTP_HX_REQUEST'] = 'true';
+			$_SERVER['REQUEST_METHOD'] = 'POST';
+			wire()->input->post->hx__state = $signedState;
+			wire()->input->post->__htmx_action = 'querySummary';
+			wire()->input->post->prefix = 'DemoView';
+
+			$cmpQuery = new HtmxV4TestDummyComponent();
+			$cmpQuery->setPreDecodedState(Component::decodeSignedPayload($signedState, $cmp->getHmacSalt()));
+			$cmpQuery->hydrate();
+			$executedQuery = $cmpQuery->executeAction();
+			expect($executedQuery)->toBeTrue()
+				->and($cmpQuery->renderToString())->toBe("<span class='summary'>DemoView: 10 (demo-ready)</span>");
+
+			// 2. State-mutating POST action (non-query*) is blocked in demo mode and emits warning notice
+			wire()->input->post->__htmx_action = 'increment';
+			wire()->input->post->step = '5';
+			wire()->input->post->label = 'mutated';
+
+			$cmpMutate = new HtmxV4TestDummyComponent();
+			$cmpMutate->setPreDecodedState(Component::decodeSignedPayload($signedState, $cmp->getHmacSalt()));
+			$cmpMutate->hydrate();
+			$executedMutation = $cmpMutate->executeAction();
+			expect($executedMutation)->toBeFalse()
+				->and($cmpMutate->count)->toBe(10)
+				->and($cmpMutate->label)->toBe('demo-ready');
+		} finally {
+			$config->demo = $previousDemo;
+			$config->protectCSRF = $previousCsrf;
+		}
+	});
 });

@@ -90,7 +90,7 @@ abstract class Ui
 
 	protected function esc(mixed $value): string
 	{
-		return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+		return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8', false);
 	}
 
 	public function setParam(string $key, mixed $value): self
@@ -156,6 +156,53 @@ abstract class Ui
 	public function action(string $url): self
 	{
 		return $this->setAttribute('hx-action', $url);
+	}
+
+	/**
+	 * HTMX v4: hx-action + hx-method shorthand.
+	 */
+	public function hxAction(string $url, string $httpMethod = 'GET'): self
+	{
+		return $this->setAttribute('hx-action', $url)
+			->setAttribute('hx-method', strtoupper(trim($httpMethod)));
+	}
+
+	public function hxMethod(string $httpMethod): self
+	{
+		return $this->setAttribute('hx-method', strtoupper(trim($httpMethod)));
+	}
+
+	public function hxTarget(string $selector): self
+	{
+		return $this->target($selector);
+	}
+
+	public function hxSwap(string $style): self
+	{
+		return $this->swap($style);
+	}
+
+	public function hxInclude(string $selector): self
+	{
+		return $this->include($selector);
+	}
+
+	/**
+	 * @param string|array<string, mixed> $values
+	 */
+	public function hxVals(string|array $values): self
+	{
+		return $this->vals($values);
+	}
+
+	public function hxConfirm(string $message): self
+	{
+		return $this->confirm($message);
+	}
+
+	public function hxTrigger(string $spec): self
+	{
+		return $this->trigger($spec);
 	}
 
 	/**

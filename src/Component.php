@@ -586,6 +586,12 @@ abstract class Component extends WireData
 			}
 		}
 
+		// ProcessWire Demo Mode ($config->demo): allow read-only query* UI actions, block state-mutating actions
+		if (!$isQueryAction && $this->isDemoModeBlocked($action)) {
+			$this->onDemoModeBlocked($action);
+			return false;
+		}
+
 		$ref = self::getReflection();
 		if (!$ref->hasMethod($action)) {
 			return false;
@@ -638,6 +644,59 @@ abstract class Component extends WireData
 		}
 
 		return true;
+	}
+
+	/**
+	 * Determine whether state-mutating actions (non-`query*`) should be blocked because ProcessWire
+	 * demo mode (`$config->demo = true`) is active.
+	 */
+	protected function isDemoModeBlocked(string $action): bool
+	{
+		$config = $this->wire()->config;
+
+		return (bool) ($config && !empty($config->demo));
+	}
+
+	/**
+	 * Handle a blocked state-mutating action when ProcessWire demo mode (`$config->demo`) is active.
+	 *
+	 * Populates component-level flash notice properties (`setNotice()`, `$flashNotice`, `$noticeMessage`)
+	 * when present on the component and records a ProcessWire warning notice so `pw-messages` is emitted.
+	 */
+	protected function onDemoModeBlocked(string $action): void
+	{
+		$title = $this->_('Demo Mode');
+		$message = $this->_('State-changing actions are disabled in demo mode.');
+
+		$ref = self::getReflection();
+		if ($ref->hasMethod('setNotice')) {
+			$setNoticeRef = $ref->getMethod('setNotice');
+			if ($setNoticeRef->getNumberOfRequiredParameters() <= 3) {
+				$setNoticeRef->invoke($this, 'warning', $title, $message);
+			}
+		} elseif ($ref->hasProperty('flashNotice')) {
+			$prop = $ref->getProperty('flashNotice');
+			$propType = $prop->getType();
+			if ($propType instanceof ReflectionNamedType && $propType->getName() === 'array') {
+				$prop->setValue($this, [
+					'variant' => 'warning',
+					'title' => $title,
+					'message' => $message,
+					'details' => '',
+				]);
+			} elseif (!$propType instanceof ReflectionNamedType || $propType->getName() === 'string' || $propType->getName() === 'mixed') {
+				$prop->setValue($this, $message);
+			}
+		} elseif ($ref->hasProperty('noticeMessage')) {
+			$msgProp = $ref->getProperty('noticeMessage');
+			$msgProp->setValue($this, $message);
+			if ($ref->hasProperty('noticeType')) {
+				$typeProp = $ref->getProperty('noticeType');
+				$typeProp->setValue($this, 'warning');
+			}
+		}
+
+		$this->warning($message);
 	}
 
 	/**
