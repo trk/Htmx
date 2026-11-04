@@ -50,6 +50,15 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 	private bool $adminThemeInputfieldsReady = false;
 
+	/** @var array<int, string> Scripts already emitted via renderInputfieldsFragment during current endpoint call */
+	private array $emittedFragmentScripts = [];
+
+	/** @var array<int, string> Styles already emitted via renderInputfieldsFragment during current endpoint call */
+	private array $emittedFragmentStyles = [];
+
+	/** @var array<string, bool> JS config keys already emitted via renderInputfieldsFragment during current endpoint call */
+	private array $emittedFragmentJsKeys = [];
+
 	/**
 	 * Resolve HMAC salt defensively from ProcessWire config.
 	 */
@@ -65,7 +74,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	{
 		return [
 			'title' => 'HTMX',
-			'version' => 211,
+			'version' => 212,
 			'summary' => 'HTMX v4 integration: native Request/Response API (HX-Request-Type, HX-Source, HX-Reselect, deferred triggers, <hx-partial>), state-aware Components, OOB swaps, Morph/TextContent swaps, and SSE/WS extensions.',
 			'href' => 'https://github.com/trk/Htmx',
 			'author' => 'Iskender TOTOGLU @trk @ukyo',
@@ -515,6 +524,15 @@ HTML;
 			}
 
 			$tHydrate = microtime(true);
+			/** @var Config|null $config */
+			$config = $this->wire()->config;
+			$beforeScripts = $config && $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
+			$beforeStyles = $config && $config->styles ? array_values(iterator_to_array($config->styles)) : [];
+			$beforeJs = $config && is_array($config->js()) ? $config->js() : [];
+			$this->emittedFragmentScripts = [];
+			$this->emittedFragmentStyles = [];
+			$this->emittedFragmentJsKeys = [];
+
 			$cmp->setPreDecodedState($decoded);
 			$cmp->hydrate();
 			$tAfterHydrate = microtime(true);
@@ -526,6 +544,34 @@ HTML;
 			$tRender = microtime(true);
 			$html = $cmp->renderToString();
 			$tAfterRender = microtime(true);
+
+			$afterScripts = $config && $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
+			$afterStyles = $config && $config->styles ? array_values(iterator_to_array($config->styles)) : [];
+			$afterJs = $config && is_array($config->js()) ? $config->js() : [];
+
+			$newScripts = array_values(array_diff($afterScripts, $beforeScripts, $this->emittedFragmentScripts));
+			$newStyles = array_values(array_diff($afterStyles, $beforeStyles, $this->emittedFragmentStyles));
+			$newJsConfig = array_diff_key($afterJs, $beforeJs, $this->emittedFragmentJsKeys);
+
+			if ($newScripts !== [] || $newStyles !== [] || $newJsConfig !== []) {
+				$assetPayload = [
+					'jsConfig' => $afterJs,
+					'newJsConfig' => $newJsConfig,
+					'scripts' => $newScripts,
+					'styles' => $newStyles,
+				];
+				$assetJson = json_encode($assetPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+				if (is_string($assetJson) && $assetJson !== '') {
+					$configScript = "\n<script type=\"application/json\" data-pw-htmx-config>{$assetJson}</script>";
+					$replaceCount = 0;
+					$injected = preg_replace('/(<\/[a-zA-Z0-9_-]+\s*>\s*)$/', $configScript . '$1', $html, 1, $replaceCount);
+					if (is_string($injected) && $replaceCount > 0) {
+						$html = $injected;
+					} else {
+						$html .= $configScript;
+					}
+				}
+			}
 
 			// 1. Inject accumulated OOB swaps + <hx-partial>
 			$oobCount = $this->fragment->count();
@@ -1044,10 +1090,21 @@ HTML;
 
 		$newScripts = array_values(array_diff($afterScripts, $beforeScripts));
 		$newStyles = array_values(array_diff($afterStyles, $beforeStyles));
+		$newJsConfig = array_diff_key($afterJs, $beforeJs);
+
+		foreach ($newScripts as $scriptUrl) {
+			$this->emittedFragmentScripts[] = $scriptUrl;
+		}
+		foreach ($newStyles as $styleUrl) {
+			$this->emittedFragmentStyles[] = $styleUrl;
+		}
+		foreach (array_keys($newJsConfig) as $jsKey) {
+			$this->emittedFragmentJsKeys[(string) $jsKey] = true;
+		}
 
 		$payload = [
 			'jsConfig' => $afterJs,
-			'newJsConfig' => array_diff_key($afterJs, $beforeJs),
+			'newJsConfig' => $newJsConfig,
 			'scripts' => $newScripts,
 			'styles' => $newStyles,
 		];

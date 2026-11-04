@@ -91,57 +91,45 @@
     dispatchAfter('htmx:after:settle', eventMap, true);
   });
 
-  function syncPwHtmxInputfieldConfig(root) {
-    var scope = (root && root.querySelectorAll) ? root : document;
-    var configNodes = scope.querySelectorAll('script[data-pw-htmx-config]');
-    var foundConfig = false;
+  function stripAssetQuery(url) {
+    return String(url || '').split('?')[0].split('#')[0];
+  }
 
-    for (var i = 0; i < configNodes.length; i++) {
-      var node = configNodes[i];
-      foundConfig = true;
-      try {
-        var raw = node.textContent || node.innerText || '{}';
-        var payload = JSON.parse(raw);
-
-        if (payload && payload.jsConfig && typeof payload.jsConfig === 'object') {
-          window.ProcessWire = window.ProcessWire || {};
-          window.ProcessWire.config = window.ProcessWire.config || {};
-          Object.keys(payload.jsConfig).forEach(function (key) {
-            window.ProcessWire.config[key] = payload.jsConfig[key];
-          });
-        }
-
-        if (payload && Array.isArray(payload.styles)) {
-          payload.styles.forEach(function (href) {
-            if (!href || document.querySelector('link[href="' + href + '"]')) {
-              return;
-            }
-            var link = document.createElement('link');
-            link.rel = 'stylesheet';
-            link.href = href;
-            (document.head || document.documentElement).appendChild(link);
-          });
-        }
-
-        if (payload && Array.isArray(payload.scripts)) {
-          payload.scripts.forEach(function (src) {
-            if (!src || document.querySelector('script[src="' + src + '"]')) {
-              return;
-            }
-            var script = document.createElement('script');
-            script.src = src;
-            (document.head || document.documentElement).appendChild(script);
-          });
-        }
-      } catch (e) {}
-
-      if (node.parentNode) {
-        node.parentNode.removeChild(node);
+  function hasStylesheetLoaded(href) {
+    if (!href) {
+      return true;
+    }
+    var baseHref = stripAssetQuery(href);
+    var links = document.querySelectorAll('link[rel="stylesheet"][href], link[href]');
+    for (var i = 0; i < links.length; i++) {
+      var existing = links[i].getAttribute('href') || '';
+      if (existing === href || (baseHref && stripAssetQuery(existing) === baseHref)) {
+        return true;
       }
     }
+    return false;
+  }
 
-    var initTarget = (root && root.nodeType === 1 && root !== document.body && root !== document.documentElement) ? root : null;
-    if (initTarget && (foundConfig || (initTarget.querySelector && initTarget.querySelector('.Inputfield, .Inputfields')))) {
+  function hasScriptLoaded(src) {
+    if (!src) {
+      return true;
+    }
+    var baseSrc = stripAssetQuery(src);
+    var scripts = document.querySelectorAll('script[src]');
+    for (var i = 0; i < scripts.length; i++) {
+      var existing = scripts[i].getAttribute('src') || '';
+      if (existing === src || (baseSrc && stripAssetQuery(existing) === baseSrc)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function initSwappedTarget(initTarget, foundConfig) {
+    if (!initTarget) {
+      return;
+    }
+    if (foundConfig || (initTarget.querySelector && initTarget.querySelector('.Inputfield, .Inputfields'))) {
       if (window.Inputfields && typeof window.Inputfields.init === 'function') {
         try {
           window.Inputfields.init(initTarget);
@@ -168,6 +156,70 @@
         } catch (e) {}
       }
     }
+  }
+
+  function syncPwHtmxInputfieldConfig(root) {
+    var scope = (root && root.querySelectorAll) ? root : document;
+    var configNodes = scope.querySelectorAll('script[data-pw-htmx-config]');
+    var foundConfig = false;
+    var pendingScripts = 0;
+    var initTarget = (root && root.nodeType === 1 && root !== document.body && root !== document.documentElement) ? root : null;
+
+    function onDynamicScriptSettled() {
+      pendingScripts--;
+      if (pendingScripts <= 0 && initTarget) {
+        initSwappedTarget(initTarget, true);
+      }
+    }
+
+    for (var i = 0; i < configNodes.length; i++) {
+      var node = configNodes[i];
+      foundConfig = true;
+      try {
+        var raw = node.textContent || node.innerText || '{}';
+        var payload = JSON.parse(raw);
+
+        if (payload && payload.jsConfig && typeof payload.jsConfig === 'object') {
+          window.ProcessWire = window.ProcessWire || {};
+          window.ProcessWire.config = window.ProcessWire.config || {};
+          Object.keys(payload.jsConfig).forEach(function (key) {
+            window.ProcessWire.config[key] = payload.jsConfig[key];
+          });
+        }
+
+        if (payload && Array.isArray(payload.styles)) {
+          payload.styles.forEach(function (href) {
+            if (hasStylesheetLoaded(href)) {
+              return;
+            }
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = href;
+            (document.head || document.documentElement).appendChild(link);
+          });
+        }
+
+        if (payload && Array.isArray(payload.scripts)) {
+          payload.scripts.forEach(function (src) {
+            if (hasScriptLoaded(src)) {
+              return;
+            }
+            pendingScripts++;
+            var script = document.createElement('script');
+            script.src = src;
+            script.onload = onDynamicScriptSettled;
+            script.onerror = onDynamicScriptSettled;
+            (document.head || document.documentElement).appendChild(script);
+          });
+        }
+      } catch (e) {}
+
+      if (node.parentNode) {
+        node.parentNode.removeChild(node);
+      }
+    }
+
+    initSwappedTarget(initTarget, foundConfig);
   }
 
   function resolveSettleTarget(evt) {

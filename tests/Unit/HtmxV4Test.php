@@ -32,6 +32,16 @@ if (!class_exists('HtmxV4TestDummyComponent')) {
 			return "<span class='summary'>{$prefix}: {$this->count} ({$this->label})</span>";
 		}
 
+		public function queryLoadAssets(): void
+		{
+			$config = $this->wire()->config;
+			if ($config) {
+				$config->styles->add('/site/modules/Dummy/DummyViewport.css?v=1');
+				$config->scripts->add('/site/modules/Dummy/DummyViewport.js?v=1');
+				$config->js('dummyViewportSetting', ['active' => true]);
+			}
+		}
+
 		public function render(): string
 		{
 			$id = 'hxc_' . $this->id();
@@ -409,5 +419,32 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		$endpointOut = $htmx->handleEndpoint($event);
 		expect($endpointOut)->toContain("data-count='99'")
 			->and($endpointOut)->toContain("data-label='beta-state'");
+		unset($_SERVER['HTTP_HX_TARGET']);
+	});
+
+	it('captures newly added styles, scripts, and jsConfig during handleEndpoint() and injects data-pw-htmx-config inside root element', function (): void {
+		/** @var Htmx $htmx */
+		$htmx = wire()->htmx;
+		$htmx->registerComponent('DummyCounter', HtmxV4TestDummyComponent::class);
+
+		$cmp = new HtmxV4TestDummyComponent();
+		$cmp->fill(['id' => 'asset-test', 'count' => 3, 'label' => 'assets']);
+		preg_match('/name="hx__state"\s+value="([^"]+)"/', $cmp->renderStatePayload(), $m);
+		$signedState = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+		$_SERVER['HTTP_HX_REQUEST'] = 'true';
+		$_SERVER['REQUEST_METHOD'] = 'GET';
+		wire()->input->get->hx__state = $signedState;
+		wire()->input->get->__htmx_action = 'queryLoadAssets';
+
+		$event = new HookEvent();
+		$out = $htmx->handleEndpoint($event);
+
+		expect($out)
+			->toContain('data-pw-htmx-config')
+			->toContain('DummyViewport.css?v=1')
+			->toContain('DummyViewport.js?v=1')
+			->toContain('dummyViewportSetting')
+			->and(str_ends_with(rtrim($out), '</div>'))->toBeTrue();
 	});
 });
