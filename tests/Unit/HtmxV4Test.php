@@ -496,4 +496,143 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 			$config->protectCSRF = $previousCsrf;
 		}
 	});
+
+	it('registers module component and UI paths via the explicit registration API and resolves through handleEndpoint()', function (): void {
+		/** @var Htmx $htmx */
+		$htmx = wire()->htmx;
+
+		$tempDir = rtrim(sys_get_temp_dir(), '/\\') . '/htmx-explicit-mod-' . uniqid('', true);
+		$componentsDir = $tempDir . '/components';
+		$uiDir = $tempDir . '/ui';
+		mkdir($componentsDir, 0777, true);
+		mkdir($uiDir, 0777, true);
+
+		file_put_contents(
+			$uiDir . '/StandaloneExplicitChip.php',
+			<<<'PHP'
+<?php
+declare(strict_types=1);
+namespace Htmx\Ui;
+use Totoglu\Htmx\Ui;
+class StandaloneExplicitChip extends Ui
+{
+	public array $defaultParams = ['label' => ''];
+	public function render(): string
+	{
+		return '<span class="explicit-chip">' . $this->esc($this->parameters->getString('label')) . '</span>';
+	}
+}
+PHP
+		);
+
+		file_put_contents(
+			$componentsDir . '/StandaloneExplicitWidget.php',
+			<<<'PHP'
+<?php
+declare(strict_types=1);
+namespace Htmx\Component;
+use Htmx\Ui\StandaloneExplicitChip;
+use Totoglu\Htmx\Component;
+class StandaloneExplicitWidget extends Component
+{
+	public int $count = 1;
+	public function queryStatus(string $tag = 'OK'): string
+	{
+		return StandaloneExplicitChip::make(['label' => "{$tag}:{$this->count}"])->render();
+	}
+	public function render(): string
+	{
+		$chip = StandaloneExplicitChip::make(['label' => "Init:{$this->count}"])->render();
+		return "<div id='explicit-widget'>{$chip}{$this->renderStatePayload()}</div>";
+	}
+}
+PHP
+		);
+
+		try {
+			$htmx->registerModulePaths($tempDir, [
+				'StandaloneExplicitWidget' => 'Htmx\\Component\\StandaloneExplicitWidget',
+			]);
+
+			$normalizedComponentsDir = rtrim(str_replace('\\', '/', $componentsDir), '/') . '/';
+			$normalizedUiDir = rtrim(str_replace('\\', '/', $uiDir), '/') . '/';
+
+			expect($htmx->allowedComponentPaths)->toContain($normalizedComponentsDir)
+				->and($htmx->allowedComponentPaths)->toContain($normalizedUiDir);
+
+			$rendered = $htmx->renderComponent('StandaloneExplicitWidget', ['count' => 9]);
+			expect($rendered)->toContain('<span class="explicit-chip">Init:9</span>');
+
+			preg_match('/name="hx__state"\s+value="([^"]+)"/', $rendered, $m);
+			expect($m)->toHaveKey(1);
+			$signedState = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+			$_SERVER['HTTP_HX_REQUEST'] = 'true';
+			$_SERVER['REQUEST_METHOD'] = 'GET';
+			wire()->input->get->hx__state = $signedState;
+			wire()->input->get->__htmx_action = 'queryStatus';
+			wire()->input->get->tag = 'Ready';
+
+			$event = new HookEvent();
+			$endpointHtml = $htmx->handleEndpoint($event);
+			expect($endpointHtml)->toBe('<span class="explicit-chip">Ready:9</span>');
+		} finally {
+			@unlink($uiDir . '/StandaloneExplicitChip.php');
+			@unlink($componentsDir . '/StandaloneExplicitWidget.php');
+			@rmdir($uiDir);
+			@rmdir($componentsDir);
+			@rmdir($tempDir);
+		}
+	});
+
+	it('resolves module directories whose folder name differs from the module class name', function (): void {
+		/** @var Htmx $htmx */
+		$htmx = wire()->htmx;
+		$config = wire()->config;
+
+		$parentDir = rtrim(sys_get_temp_dir(), '/\\') . '/htmx-custom-folder-' . uniqid('', true);
+		$moduleFolder = $parentDir . '/CustomFolderName';
+		$componentsDir = $moduleFolder . '/components';
+		mkdir($componentsDir, 0777, true);
+
+		$moduleClass = 'ProcessMismatchedDirModule';
+		file_put_contents($moduleFolder . '/' . $moduleClass . '.module.php', "<?php namespace ProcessWire; class {$moduleClass} extends WireData implements Module {}");
+		file_put_contents(
+			$componentsDir . '/MismatchedFolderComponent.php',
+			<<<'PHP'
+<?php
+declare(strict_types=1);
+namespace Htmx\Component;
+use Totoglu\Htmx\Component;
+class MismatchedFolderComponent extends Component
+{
+	public string $status = 'resolved';
+	public function render(): string
+	{
+		return "<div data-status='{$this->status}'>{$this->renderStatePayload()}</div>";
+	}
+}
+PHP
+		);
+
+		try {
+			$expectedDir = rtrim(str_replace('\\', '/', $moduleFolder), '/') . '/';
+			expect($htmx->resolveModuleDirectory($moduleClass, null, $parentDir))->toBe($expectedDir);
+
+			$config->setPath($moduleClass, $moduleFolder . '/');
+
+			$htmx->registerModulePaths($moduleClass, [
+				'MismatchedFolderComponent' => 'Htmx\\Component\\MismatchedFolderComponent',
+			]);
+
+			$rendered = $htmx->renderComponent('MismatchedFolderComponent', ['status' => 'custom-dir-ok']);
+			expect($rendered)->toContain("data-status='custom-dir-ok'");
+		} finally {
+			@unlink($componentsDir . '/MismatchedFolderComponent.php');
+			@unlink($moduleFolder . '/' . $moduleClass . '.module.php');
+			@rmdir($componentsDir);
+			@rmdir($moduleFolder);
+			@rmdir($parentDir);
+		}
+	});
 });

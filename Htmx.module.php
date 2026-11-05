@@ -10,6 +10,41 @@ use Totoglu\Htmx\Fragment;
 use Totoglu\Htmx\Component;
 use Totoglu\Htmx\Debug\HtmxTracyPanel;
 
+if (!\defined('TOTOGLU_HTMX_AUTOLOADER')) {
+	\define('TOTOGLU_HTMX_AUTOLOADER', true);
+	\spl_autoload_register(static function (string $class): void {
+		if (\str_starts_with($class, 'Totoglu\\Htmx\\')) {
+			$rel = \str_replace('\\', '/', \substr($class, \strlen('Totoglu\\Htmx\\'))) . '.php';
+			$path = __DIR__ . '/src/' . $rel;
+			if (\is_file($path)) {
+				require_once $path;
+			}
+			return;
+		}
+		if (\str_starts_with($class, 'Htmx\\Ui\\')) {
+			$short = \str_replace('\\', '/', \substr($class, \strlen('Htmx\\Ui\\')));
+			foreach (Htmx::registeredUiPaths() as $dir) {
+				$path = $dir . $short . '.php';
+				if (\is_file($path)) {
+					require_once $path;
+					return;
+				}
+			}
+			return;
+		}
+		if (\str_starts_with($class, 'Htmx\\Component\\')) {
+			$short = \str_replace('\\', '/', \substr($class, \strlen('Htmx\\Component\\')));
+			foreach (Htmx::registeredComponentPaths() as $dir) {
+				$path = $dir . $short . '.php';
+				if (\is_file($path)) {
+					require_once $path;
+					return;
+				}
+			}
+		}
+	});
+}
+
 /**
  * HTMX v4 Module for ProcessWire
  *
@@ -41,6 +76,28 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 	/** @var array<string> Valid and checked paths to components and UI that are allowed for rendering */
 	public array $allowedComponentPaths = [];
+
+	/** @var list<string> Registered component directories for autoloading */
+	private static array $componentPaths = [];
+
+	/** @var list<string> Registered UI directories for autoloading */
+	private static array $uiPaths = [];
+
+	/**
+	 * @return list<string>
+	 */
+	public static function registeredComponentPaths(): array
+	{
+		return self::$componentPaths;
+	}
+
+	/**
+	 * @return list<string>
+	 */
+	public static function registeredUiPaths(): array
+	{
+		return self::$uiPaths;
+	}
 
 	/**
 	 * Internal debug info for Tracy panel / response headers (per request).
@@ -126,28 +183,17 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		$this->fragment = new Fragment();
 
 		$config = $this->wire()->config;
-		$classLoader = $this->wire()->classLoader;
 		$sitePath = $config->paths->site;
 
 		$componentsDir = trim((string) ($this->componentsPath ?: 'components/'), '/');
 		$uiDir = trim((string) ($this->uiPath ?: 'ui/'), '/');
 
 		if (is_dir($sitePath . $componentsDir . '/')) {
-			if ($classLoader) {
-				$classLoader->addNamespace('Htmx\Component', $sitePath . $componentsDir . '/');
-			}
-			if ($this->allowComponentPaths) {
-				$this->allowedComponentPaths[] = $sitePath . $componentsDir . '/';
-			}
+			$this->registerComponentPath($sitePath . $componentsDir . '/', (bool) $this->allowComponentPaths);
 		}
 
 		if (is_dir($sitePath . $uiDir . '/')) {
-			if ($classLoader) {
-				$classLoader->addNamespace('Htmx\Ui', $sitePath . $uiDir . '/');
-			}
-			if ($this->allowComponentPaths) {
-				$this->allowedComponentPaths[] = $sitePath . $uiDir . '/';
-			}
+			$this->registerUiPath($sitePath . $uiDir . '/', (bool) $this->allowComponentPaths);
 		}
 
 		$this->discoverModuleComponents();
@@ -824,9 +870,100 @@ HTML;
 		}
 	}
 
-	public function registerComponent(string $alias, string $class): self
+	public function registerComponent(string $alias, string $class, ?string $componentsDir = null): self
 	{
+		if ($componentsDir !== null && $componentsDir !== '') {
+			$this->registerComponentPath($componentsDir);
+		}
+
 		$this->components[$alias] = $class;
+		return $this;
+	}
+
+	/**
+	 * Register a directory under the `Htmx\Component` namespace and optionally allow it in `$files->render()`.
+	 */
+	public function registerComponentPath(string $path, bool $allowFileRender = true): self
+	{
+		$dir = rtrim(str_replace('\\', '/', $path), '/') . '/';
+		if (!is_dir($dir)) {
+			return $this;
+		}
+
+		if (!in_array($dir, self::$componentPaths, true)) {
+			self::$componentPaths[] = $dir;
+		}
+
+		$classLoader = $this->wire()?->classLoader;
+		if ($classLoader) {
+			$classLoader->addNamespace('Htmx\\Component', $dir);
+		}
+
+		if ($allowFileRender && !in_array($dir, $this->allowedComponentPaths, true)) {
+			$this->allowedComponentPaths[] = $dir;
+		}
+
+		return $this;
+	}
+
+	/**
+	 * Register a directory under the `Htmx\Ui` namespace and optionally allow it in `$files->render()`.
+	 */
+	public function registerUiPath(string $path, bool $allowFileRender = true): self
+	{
+		$dir = rtrim(str_replace('\\', '/', $path), '/') . '/';
+		if (!is_dir($dir)) {
+			return $this;
+		}
+
+		if (!in_array($dir, self::$uiPaths, true)) {
+			self::$uiPaths[] = $dir;
+		}
+
+		$classLoader = $this->wire()?->classLoader;
+		if ($classLoader) {
+			$classLoader->addNamespace('Htmx\\Ui', $dir);
+		}
+
+		if ($allowFileRender && !in_array($dir, $this->allowedComponentPaths, true)) {
+			$this->allowedComponentPaths[] = $dir;
+		}
+
+		return $this;
+	}
+
+	/**
+	 * Register a module's `components/` and `ui/` directories and optional component aliases.
+	 *
+	 * @param string $moduleDirOrClass Module directory path or installed module class name
+	 * @param array<string, class-string> $components Optional map of `alias => FQCN` to register
+	 */
+	public function registerModulePaths(string $moduleDirOrClass, array $components = [], bool $allowFileRender = true): self
+	{
+		$baseDir = is_dir($moduleDirOrClass)
+			? rtrim(str_replace('\\', '/', $moduleDirOrClass), '/') . '/'
+			: $this->resolveModuleDirectory($moduleDirOrClass);
+
+		if ($baseDir !== null && is_dir($baseDir)) {
+			$componentsDir = $baseDir . 'components/';
+			$uiDir = $baseDir . 'ui/';
+
+			if (is_dir($componentsDir)) {
+				$this->registerComponentPath($componentsDir, $allowFileRender);
+			}
+
+			if (is_dir($uiDir)) {
+				$this->registerUiPath($uiDir, $allowFileRender);
+			}
+		}
+
+		foreach ($components as $alias => $fqcn) {
+			$this->registerComponent((string) $alias, $fqcn);
+			if ($fqcn !== $alias) {
+				$this->registerComponent($fqcn, $fqcn);
+			}
+		}
+
 		return $this;
 	}
 
@@ -1387,7 +1524,10 @@ HTML;
 		if ($cache) {
 			$cached = $cache->get('htmx.module-components');
 			if (is_string($cached) && $cached !== '') {
-				$paths = json_decode($cached, true);
+				$decoded = json_decode($cached, true);
+				if (is_array($decoded) && ($decoded['v'] ?? null) === 2 && is_array($decoded['paths'] ?? null)) {
+					$paths = $decoded['paths'];
+				}
 			}
 		}
 
@@ -1396,31 +1536,19 @@ HTML;
 			if ($cache) {
 				$cache->save(
 					'htmx.module-components',
-					(string) json_encode($paths, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+					(string) json_encode(['v' => 2, 'paths' => $paths], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
 					WireCache::expireNever
 				);
 			}
 		}
 
-		$classLoader = $this->wire()->classLoader;
-
 		foreach ($paths as $entry) {
 			if (!empty($entry['components']) && is_dir($entry['components'])) {
-				if ($classLoader) {
-					$classLoader->addNamespace('Htmx\Component', $entry['components']);
-				}
-				if ($this->allowComponentPaths && !in_array($entry['components'], $this->allowedComponentPaths, true)) {
-					$this->allowedComponentPaths[] = $entry['components'];
-				}
+				$this->registerComponentPath($entry['components'], (bool) $this->allowComponentPaths);
 			}
 
 			if (!empty($entry['ui']) && is_dir($entry['ui'])) {
-				if ($classLoader) {
-					$classLoader->addNamespace('Htmx\Ui', $entry['ui']);
-				}
-				if ($this->allowComponentPaths && !in_array($entry['ui'], $this->allowedComponentPaths, true)) {
-					$this->allowedComponentPaths[] = $entry['ui'];
-				}
+				$this->registerUiPath($entry['ui'], (bool) $this->allowComponentPaths);
 			}
 		}
 	}
@@ -1432,11 +1560,18 @@ HTML;
 	{
 		$result = [];
 		$modules = $this->wire()->modules;
-		$modulesPath = $this->wire()->config->paths->siteModules;
+		$config = $this->wire()->config;
+		if (!$modules || !$config) {
+			return $result;
+		}
+
+		$modulesPath = (string) ($config->paths->siteModules ?? '');
+		$selfClass = $this->className();
+		$seenDirs = [];
 
 		foreach ($modules as $module) {
 			$info = $modules->getModuleInfoVerbose($module);
-			$className = $info['name'] ?? '';
+			$className = (string) ($info['name'] ?? '');
 
 			$requires = $info['requires'] ?? [];
 			if (!is_array($requires)) {
@@ -1445,18 +1580,23 @@ HTML;
 
 			$dependsOnHtmx = false;
 			foreach ($requires as $req) {
-				if (is_string($req) && (stripos($req, 'Htmx') === 0 || stripos($req, 'WireKit') === 0)) {
-					$dependsOnHtmx = true;
-					break;
+				if (!is_string($req)) {
+					continue;
+				}
+				foreach (explode(',', $req) as $part) {
+					if (stripos(trim($part), $selfClass) === 0) {
+						$dependsOnHtmx = true;
+						break 2;
+					}
 				}
 			}
 
-			if (!$dependsOnHtmx || $className === 'Htmx') {
+			if (!$dependsOnHtmx || $className === '' || $className === $selfClass) {
 				continue;
 			}
 
-			$moduleDir = $modulesPath . $className . '/';
-			if (!is_dir($moduleDir)) {
+			$moduleDir = $this->resolveModuleDirectory($className, $module, $modulesPath);
+			if ($moduleDir === null || !is_dir($moduleDir) || isset($seenDirs[$moduleDir])) {
 				continue;
 			}
 
@@ -1467,6 +1607,7 @@ HTML;
 				continue;
 			}
 
+			$seenDirs[$moduleDir] = true;
 			$entry = ['module' => $className];
 
 			if (is_dir($componentsDir)) {
@@ -1481,6 +1622,55 @@ HTML;
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Resolve the filesystem directory for a module even when its folder name differs from its class name.
+	 */
+	public function resolveModuleDirectory(string $className, mixed $module = null, string $modulesPath = ''): ?string
+	{
+		$config = $this->wire()?->config;
+		$modules = $this->wire()?->modules;
+
+		if ($config) {
+			$configuredPath = $config->paths($className);
+			if (is_string($configuredPath) && $configuredPath !== '' && is_dir($configuredPath)) {
+				return rtrim(str_replace('\\', '/', $configuredPath), '/') . '/';
+			}
+		}
+
+		if ($modules && method_exists($modules, 'getModuleFile')) {
+			$target = $className !== '' ? $className : $module;
+			if ($target !== null && $target !== '') {
+				$moduleFile = $modules->getModuleFile($target, ['fast' => false]);
+				if (is_string($moduleFile) && $moduleFile !== '' && is_file($moduleFile)) {
+					$dir = rtrim(str_replace('\\', '/', dirname($moduleFile)), '/') . '/';
+					if (is_dir($dir)) {
+						return $dir;
+					}
+				}
+			}
+		}
+
+		if ($modulesPath === '' && $config) {
+			$modulesPath = (string) ($config->paths->siteModules ?? '');
+		}
+
+		if ($modulesPath !== '') {
+			$baseModulesPath = rtrim(str_replace('\\', '/', $modulesPath), '/') . '/';
+			$directDir = $baseModulesPath . $className . '/';
+			if (is_dir($directDir)) {
+				return $directDir;
+			}
+
+			foreach (glob($baseModulesPath . '*/' . $className . '.module*') ?: [] as $match) {
+				if (is_file($match)) {
+					return rtrim(str_replace('\\', '/', dirname($match)), '/') . '/';
+				}
+			}
+		}
+
+		return null;
 	}
 
 	private function inAdmin(): bool

@@ -38,9 +38,7 @@ final class LayeringScanner
 	 *
 	 * @var list<string>
 	 */
-	public const array KNOWN_VIOLATIONS = [
-		'Htmx.module.php|ref:WireKit', // #02 Htmx standalone
-	];
+	public const array KNOWN_VIOLATIONS = [];
 
 	/**
 	 * Layer table. `lower` lists every module this module may reference, direct lower layer first.
