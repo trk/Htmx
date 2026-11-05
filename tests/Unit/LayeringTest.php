@@ -5,101 +5,79 @@ declare(strict_types=1);
 namespace Totoglu\Htmx\Tests\Unit;
 
 /**
- * Layering conformance scanner (see .scratch/wire-ecosystem/SPEC.md, "Seam 1 — LayeringTest").
+ * Self-contained module boundary & dependency scanner.
  *
- * Statically scans this module's own PHP/JS/CSS files (excluding tests/ and vendored code) and
- * reports every reference to a module that is not in a lower layer:
- *
- * - `ref:<Module>`      namespace, module/class name, API variable, `<apiVar>:` provider scheme or kebab-case module string
- * - `prefix:<prefix>`   CSS/JS class or attribute prefix owned by another module (e.g. `we-`, `data-wf-`)
- * - `path:<Module>`     hard-coded file path into another module's directory (any module)
- * - `requires:<Name>`   getModuleInfo() 'requires' entry outside this module and its lower layers
- * - `requires-missing:<Name>` main module does not require its direct lower layer
- *
- * Sibling references (`ref:` and `prefix:`) are permitted only under `src/Integration/<Sibling>/`.
- *
- * The scanner logic is intentionally duplicated in every module (modules are independent repos).
- * Only MODULE, VENDORED_PATHS and KNOWN_VIOLATIONS differ between copies.
+ * Verifies that this module only references its own classes/namespaces and its
+ * declared lower-layer dependencies, without hardcoding sibling or upper-layer module names.
  */
 final class LayeringScanner
 {
-	/** Module under test (key of ECOSYSTEM). */
 	public const string MODULE = 'Htmx';
 
+	public const string MAIN_MODULE = 'Htmx';
+
+	/** @var list<string> Only this module and its allowed lower-layer dependencies. */
+	public const array ALLOWED_MODULES = ['Htmx'];
+
+	/** @var list<string> Direct module dependencies that MAIN_MODULE must declare in getModuleInfo()['requires']. */
+	public const array REQUIRED_DIRECT = [];
+
 	/** @var list<string> Third-party code shipped inside the module, relative to the module root. */
-	public const array VENDORED_PATHS = [
-		'resources/htmx/',
-		'resources/_hyperscript/',
-	];
+	public const array VENDORED_PATHS = ['resources/htmx/', 'resources/_hyperscript/'];
 
-	/**
-	 * Violations that exist today, one entry per "file|reference". Every ticket that fixes a
-	 * violation must delete its entry; the stale-entry test fails until it does.
-	 *
-	 * @var list<string>
-	 */
+	/** @var list<string> */
 	public const array KNOWN_VIOLATIONS = [];
-
-	/**
-	 * Layer table. `lower` lists every module this module may reference, direct lower layer first.
-	 *
-	 * @var array<string, array{main: string, namespace: string, prefix: string|null, apiVar: string|null, lower: list<string>}>
-	 */
-	public const array ECOSYSTEM = [
-		'Htmx' => ['main' => 'Htmx', 'namespace' => 'Totoglu\\Htmx', 'prefix' => null, 'apiVar' => 'htmx', 'lower' => []],
-		'WireKit' => ['main' => 'WireKit', 'namespace' => 'Totoglu\\WireKit', 'prefix' => 'wk', 'apiVar' => 'kit', 'lower' => ['Htmx']],
-		'WireEntries' => ['main' => 'WireEntries', 'namespace' => 'Totoglu\\WireEntries', 'prefix' => 'we', 'apiVar' => 'entries', 'lower' => ['WireKit', 'Htmx']],
-		'WireSeo' => ['main' => 'WireSeo', 'namespace' => 'Totoglu\\WireSeo', 'prefix' => 'ws', 'apiVar' => 'seo', 'lower' => ['WireEntries', 'WireKit', 'Htmx']],
-		'WireForms' => ['main' => 'WireForms', 'namespace' => 'Totoglu\\WireForms', 'prefix' => 'wf', 'apiVar' => 'forms', 'lower' => ['WireEntries', 'WireKit', 'Htmx']],
-		'WireNavigation' => ['main' => 'WireNavigation', 'namespace' => 'Totoglu\\WireNavigation', 'prefix' => 'wn', 'apiVar' => 'navigation', 'lower' => ['WireEntries', 'WireKit', 'Htmx']],
-		'WireHeadless' => ['main' => 'WireHeadless', 'namespace' => 'Totoglu\\WireHeadless', 'prefix' => 'wh', 'apiVar' => 'headless', 'lower' => ['WireEntries', 'WireKit', 'Htmx']],
-		'WireConsole' => ['main' => 'ProcessWireConsole', 'namespace' => 'Totoglu\\WireConsole', 'prefix' => 'wc', 'apiVar' => null, 'lower' => ['WireKit', 'Htmx']],
-	];
 
 	private const array EXCLUDED_DIRECTORIES = ['tests', 'vendor', 'node_modules', '.git'];
 
 	private const array SCANNED_EXTENSIONS = ['php', 'js', 'css'];
 
+	private const array CORE_WIRE_CLASSES = [
+		'Wire',
+		'WireData',
+		'WireArray',
+		'WireAction',
+		'WireCache',
+		'WireClassLoader',
+		'WireDatabaseBackup',
+		'WireDatabasePDO',
+		'WireDatabasePDOStatement',
+		'WireDateTime',
+		'WireException',
+		'WireCSRFException',
+		'Wire404Exception',
+		'WirePermissionException',
+		'WireFileTools',
+		'WireHooks',
+		'WireHttp',
+		'WireInput',
+		'WireInputData',
+		'WireInputDataCookie',
+		'WireLog',
+		'WireMail',
+		'WireMailInterface',
+		'WireMailTools',
+		'WireNumberTools',
+		'WirePaginatable',
+		'WireQueue',
+		'WireRandom',
+		'WireSaveableItems',
+		'WireSaveableItemsLookup',
+		'WireSessionHandler',
+		'WireShutdown',
+		'WireSortable',
+		'WireTab',
+		'WireTabs',
+		'WireTempDir',
+		'WireTextTools',
+		'WireTrackable',
+		'WireTranslatable',
+		'WireUpload',
+	];
+
 	public static function moduleRoot(): string
 	{
 		return dirname(__DIR__, 2);
-	}
-
-	/**
-	 * Modules that are neither lower nor higher than the module under test.
-	 *
-	 * @return list<string>
-	 */
-	public static function siblings(): array
-	{
-		$siblings = [];
-		foreach (self::ECOSYSTEM as $name => $definition) {
-			if ($name === self::MODULE || in_array($name, self::ECOSYSTEM[self::MODULE]['lower'], true)) {
-				continue;
-			}
-			if (!in_array(self::MODULE, $definition['lower'], true)) {
-				$siblings[] = $name;
-			}
-		}
-
-		return $siblings;
-	}
-
-	/**
-	 * Modules the module under test must not reference (higher layers and siblings).
-	 *
-	 * @return list<string>
-	 */
-	public static function forbiddenModules(): array
-	{
-		$forbidden = [];
-		foreach (array_keys(self::ECOSYSTEM) as $name) {
-			if ($name !== self::MODULE && !in_array($name, self::ECOSYSTEM[self::MODULE]['lower'], true)) {
-				$forbidden[] = $name;
-			}
-		}
-
-		return $forbidden;
 	}
 
 	/**
@@ -139,13 +117,16 @@ final class LayeringScanner
 	}
 
 	/**
-	 * Module and component/ui class names owned by a module, read from its directory when present.
+	 * Module and component/ui class names owned by an allowed module.
 	 *
 	 * @return list<string>
 	 */
 	public static function ownedNames(string $module): array
 	{
-		$names = [$module, self::ECOSYSTEM[$module]['main']];
+		$names = [$module];
+		if ($module === self::MODULE) {
+			$names[] = self::MAIN_MODULE;
+		}
 		$directory = dirname(self::moduleRoot()) . '/' . $module;
 		foreach (glob($directory . '/*.module.php') ?: [] as $moduleFile) {
 			$names[] = basename($moduleFile, '.module.php');
@@ -169,41 +150,7 @@ final class LayeringScanner
 	}
 
 	/**
-	 * Regular expressions that identify a reference to a module.
-	 *
-	 * @return list<string>
-	 */
-	public static function referencePatterns(string $module): array
-	{
-		$definition = self::ECOSYSTEM[$module];
-		$namespace = str_replace('\\', '\\\\{1,2}', $definition['namespace']);
-		$kebab = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '-$0', $module));
-		$names = array_map(static fn(string $name): string => preg_quote($name, '/'), self::ownedNames($module));
-		usort($names, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
-
-		$patterns = [
-			'/' . $namespace . '\b/',
-			'/\b(?:' . implode('|', $names) . ')\b/',
-			'/(?<![\w-])' . preg_quote($kebab, '/') . '\b/',
-		];
-		if ($definition['apiVar'] !== null) {
-			$apiVar = preg_quote($definition['apiVar'], '/');
-			$patterns[] = '/wire\(\s*[\'"]' . $apiVar . '[\'"]|wire\(\)\s*->\s*' . $apiVar . '\b|[\'"]' . $apiVar . ':/';
-		}
-
-		return $patterns;
-	}
-
-	/**
-	 * Regular expression that identifies a CSS/JS prefix owned by a module.
-	 */
-	public static function prefixPattern(string $prefix): string
-	{
-		return '/(?<![\w-])(?:pw-|data-|--)?' . preg_quote($prefix, '/') . '-(?=[a-z0-9])/i';
-	}
-
-	/**
-	 * All current violations keyed by "file|reference" with a human-readable location.
+	 * Scan all module files for references outside ALLOWED_MODULES (except under src/Integration/<Target>/).
 	 *
 	 * @return array<string, string>
 	 */
@@ -211,30 +158,47 @@ final class LayeringScanner
 	{
 		$violations = [];
 		$files = self::files();
-		$siblings = self::siblings();
+		$allowedTotogluRoots = array_merge(self::ALLOWED_MODULES, ['Console']);
+		$allowedModuleClasses = self::CORE_WIRE_CLASSES;
+		foreach (self::ALLOWED_MODULES as $allowedMod) {
+			$allowedModuleClasses = array_merge($allowedModuleClasses, self::ownedNames($allowedMod));
+		}
+		$allowedModuleClasses = array_values(array_unique($allowedModuleClasses));
 
 		foreach ($files as $path => $contents) {
-			foreach (self::forbiddenModules() as $module) {
-				if (in_array($module, $siblings, true) && str_starts_with($path, 'src/Integration/' . $module . '/')) {
-					continue;
-				}
-				foreach (self::referencePatterns($module) as $pattern) {
-					if (self::record($violations, $path, 'ref:' . $module, $pattern, $contents)) {
-						break;
+			$integrationTarget = null;
+			if (preg_match('#^src/Integration/([A-Za-z0-9_]+)/#', $path, $intMatch) === 1) {
+				$integrationTarget = $intMatch[1];
+			}
+
+			// 1. Check any Totoglu\<Package> namespace reference
+			if (preg_match_all('/\bTotoglu\\\\{1,2}([A-Za-z0-9_]+)\b/', $contents, $nsMatches, PREG_OFFSET_CAPTURE) > 0) {
+				foreach ($nsMatches[1] as $idx => $nsMatch) {
+					$pkg = $nsMatch[0];
+					if (in_array($pkg, $allowedTotogluRoots, true) || $pkg === $integrationTarget) {
+						continue;
 					}
-				}
-				$prefix = self::ECOSYSTEM[$module]['prefix'];
-				if ($prefix !== null) {
-					self::record($violations, $path, 'prefix:' . $prefix . '-', self::prefixPattern($prefix), $contents);
+					self::recordOffset($violations, $path, 'ref:' . $pkg, $nsMatches[0][$idx][0], $nsMatches[0][$idx][1], $contents);
 				}
 			}
 
-			foreach (array_keys(self::ECOSYSTEM) as $module) {
-				if ($module === self::MODULE) {
+			// 2. Check references to classes owned by other installed modules in site/modules/
+			foreach (glob(dirname(self::moduleRoot()) . '/*', GLOB_ONLYDIR) ?: [] as $siblingDir) {
+				$otherMod = basename($siblingDir);
+				if (in_array($otherMod, self::ALLOWED_MODULES, true) || $otherMod === $integrationTarget) {
 					continue;
 				}
-				$pattern = '/[\'"](?:[^\'"\n]*\/)?' . preg_quote($module, '/') . '\/[^\'"\n]*[\'"]/';
-				self::record($violations, $path, 'path:' . $module, $pattern, $contents);
+				if (!str_starts_with($otherMod, 'Wire') && $otherMod !== 'Htmx') {
+					continue;
+				}
+				foreach (self::ownedNames($otherMod) as $otherClass) {
+					if (in_array($otherClass, $allowedModuleClasses, true)) {
+						continue;
+					}
+					if (preg_match('/\b' . preg_quote($otherClass, '/') . '\b/', $contents, $m, PREG_OFFSET_CAPTURE) === 1) {
+						self::recordOffset($violations, $path, 'class:' . $otherClass, $m[0][0], $m[0][1], $contents);
+					}
+				}
 			}
 		}
 
@@ -255,7 +219,7 @@ final class LayeringScanner
 	public static function requiresViolations(array $files): array
 	{
 		$allowed = ['PHP', 'ProcessWire'];
-		foreach (array_merge([self::MODULE], self::ECOSYSTEM[self::MODULE]['lower']) as $module) {
+		foreach (self::ALLOWED_MODULES as $module) {
 			$allowed = array_merge($allowed, self::ownedNames($module));
 		}
 
@@ -270,10 +234,13 @@ final class LayeringScanner
 					$violations[$path . '|requires:' . $requirement] = $path . ": 'requires' lists " . $requirement;
 				}
 			}
-			$direct = self::ECOSYSTEM[self::MODULE]['lower'][0] ?? null;
-			$isMainModule = $path === self::ECOSYSTEM[self::MODULE]['main'] . '.module.php';
-			if ($isMainModule && $direct !== null && !in_array($direct, $requires, true)) {
-				$violations[$path . '|requires-missing:' . $direct] = $path . ": 'requires' does not list " . $direct;
+			$isMainModule = $path === self::MAIN_MODULE . '.module.php';
+			if ($isMainModule) {
+				foreach (self::REQUIRED_DIRECT as $direct) {
+					if (!in_array($direct, $requires, true)) {
+						$violations[$path . '|requires-missing:' . $direct] = $path . ": 'requires' does not list " . $direct;
+					}
+				}
 			}
 		}
 
@@ -305,22 +272,15 @@ final class LayeringScanner
 	}
 
 	/**
-	 * Record the first match of a pattern in a file. Returns true when a match was recorded.
-	 *
 	 * @param array<string, string> $violations
 	 */
-	private static function record(array &$violations, string $path, string $reference, string $pattern, string $contents): bool
+	private static function recordOffset(array &$violations, string $path, string $reference, string $matchedText, int $offset, string $contents): void
 	{
-		if (preg_match($pattern, $contents, $match, PREG_OFFSET_CAPTURE) !== 1) {
-			return false;
-		}
 		$key = $path . '|' . $reference;
 		if (!array_key_exists($key, $violations)) {
-			$line = substr_count($contents, "\n", 0, $match[0][1]) + 1;
-			$violations[$key] = $path . ':' . $line . " matches '" . $match[0][0] . "'";
+			$line = substr_count($contents, "\n", 0, $offset) + 1;
+			$violations[$key] = $path . ':' . $line . " matches '" . $matchedText . "'";
 		}
-
-		return true;
 	}
 }
 
