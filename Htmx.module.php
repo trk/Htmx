@@ -1678,4 +1678,15 @@ HTML;
 		$page = $this->wire()->page;
 		return (bool) ($page && $page->template && $page->template->name === 'admin');
 	}
+
+	public function ___install(): void
+	{
+		$this->wire()?->cache?->delete('htmx.module-components');
+	}
+
+	public function ___uninstall(): void
+	{
+		$this->wire()?->cache?->delete('htmx.module-components');
+		$this->wire()?->fuel?->remove('htmx');
+	}
 }

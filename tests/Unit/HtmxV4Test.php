@@ -635,4 +635,57 @@ PHP
 			@rmdir($parentDir);
 		}
 	});
+
+	it('cleans up cache and fuel on ___uninstall() and declares stable version 2.1.3 in composer.json', function () {
+		$composer = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/composer.json'), true);
+		expect($composer['version'] ?? null)->toBe('2.1.3')
+			->and($composer['require']['php'] ?? null)->toBe('>=8.4');
+
+		$cache = new class {
+			public array $deleted = [];
+
+			public function delete(string $key): void
+			{
+				$this->deleted[] = $key;
+			}
+		};
+		$fuel = new class {
+			public array $removed = [];
+
+			public function remove(string $key): void
+			{
+				$this->removed[] = $key;
+			}
+		};
+
+		$wire = new class($cache, $fuel) {
+			public function __construct(
+				public object $cache,
+				public object $fuel,
+			) {
+			}
+		};
+
+		$htmx = new class($wire) extends \ProcessWire\Htmx {
+			public function __construct(private readonly object $mockWire)
+			{
+			}
+
+			public function wire($name = '', $value = null, $lock = false)
+			{
+				if ($name === '') {
+					return $this->mockWire;
+				}
+				return $this->mockWire->{$name} ?? null;
+			}
+		};
+
+		$htmx->___install();
+		expect($cache->deleted)->toContain('htmx.module-components');
+
+		$cache->deleted = [];
+		$htmx->___uninstall();
+		expect($cache->deleted)->toContain('htmx.module-components')
+			->and($fuel->removed)->toContain('htmx');
+	});
 });
