@@ -65,7 +65,7 @@ Translate the HTMX 4 references above into these module-specific implementation 
 
 - **Stateful Components:** MUST reside in `site/components/`, use `namespace Htmx\Component;`, and `extend Totoglu\Htmx\Component`.
 - **Stateless UI Elements:** MUST reside in `site/ui/`, use `namespace Htmx\Ui;`, and `extend Totoglu\Htmx\Ui`.
-- **Module-Bundled Components:** Modules that declare `'requires' => ['Htmx']` and have `components/` and/or `ui/` directories are auto-discovered. No manual `registerComponent()` needed.
+- **Module-Bundled Components:** Modules that declare `'requires' => ['Htmx']` and have `components/` and/or `ui/` directories are auto-discovered (even when the module folder name differs from the module class name), or can register paths and component aliases explicitly via `$htmx->registerModulePaths(__DIR__, [...])`, `$htmx->registerComponentPath($dir)`, and `$htmx->registerUiPath($dir)`.
 - Never mix stateful and stateless patterns.
 
 ## 2. Stateful Components (`Totoglu\Htmx\Component`)

@@ -422,7 +422,7 @@ Use the `--dir` option if placing elements outside the default `site/components`
 ## Essential Tools & Ecosystem
 
 - `site/modules/Htmx` (Heavily engaging the internal routing of `Totoglu\Htmx\Component` and `Totoglu\Htmx\Ui`).
-  - **Always read** [AGENTS.md](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/AGENTS.md) inside the module before authoring non-trivial components — it contains the canonical method signatures and anti-pattern list.
+  - **Always read** [AGENTS.md](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/AGENTS.md) inside the module before authoring non-trivial components — it contains the canonical method signatures and anti-pattern list.
 - UIkit 3 (The default UI framework utilized). As HTMX DOM integrations do NOT repeatedly fire `DOMContentLoaded`, asynchronous UIkit elements requiring JS initialization (uk-modal, uk-accordion) must be structured relative to HTMX v4 `htmx:after:settle` events (colon-format, NOT `htmx:afterSettle`).
 - `site/modules/Htmx/src/Request.php`, `Response.php`, `Fragment.php`, `Ui.php`, `Component.php` are the five authoritative source-of-truth classes for API signatures; never hallucinate method names beyond what these files declare.
 
@@ -462,4 +462,4 @@ When you need to understand, use, or hook into a ProcessWire core class or modul
 - You **MUST** consult the local AI-optimized Markdown API documentation starting at `.llms/docs/index.md` (or, if absent, at `site/modules/Htmx/../../../.agents/docs/`).
 - Navigate through the index, find the relevant class document (e.g. `.llms/docs/core/Page.md`), and use your file reading tools to read its methods, parameters, and hookable (🪝) events before writing any code.
 - The five Totoglu\Htmx source-of-truth files take ultimate precedence for signatures:
-  [Request.php](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/src/Request.php), [Response.php](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/src/Response.php), [Fragment.php](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/src/Fragment.php), [Ui.php](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/src/Ui.php), [Component.php](file:///Users/iskender/Code/php-prod/skeleton-charter/site/modules/Htmx/src/Component.php).
+  [Request.php](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/src/Request.php), [Response.php](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/src/Response.php), [Fragment.php](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/src/Fragment.php), [Ui.php](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/src/Ui.php), [Component.php](file:///Users/iskender/Code/php-prod/processwire/site/modules/Htmx/src/Component.php).

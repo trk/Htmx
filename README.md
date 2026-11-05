@@ -165,15 +165,15 @@ _Note: These directory paths are fully customizable (e.g. `my-components/`) via 
 
 This means you can place your component class files directly in `site/components/` and simply declare the `namespace Htmx\Component;`, and the module will instantly know how to load and render them during stateless POST requests without requiring custom auto-loaders or `require_once` statements.
 
-### Module-Level Discovery (v1.1.4+)
+### Module-Level Discovery & Explicit Registration API
 
-The HTMX module also automatically discovers components bundled inside **other ProcessWire modules** — no `autoload => true` or manual `registerComponent()` calls required.
+The HTMX module automatically discovers components bundled inside **other ProcessWire modules** — and also provides an explicit registration API (`registerModulePaths()`, `registerComponentPath()`, `registerUiPath()`) for modules that register paths programmatically.
 
 **How it works:**
 
-1. When the Htmx module initializes, it scans all installed modules that declare `'requires' => ['Htmx']` in their module info.
-2. For each qualifying module, it checks for `components/` and/or `ui/` directories in the module root.
-3. If found, those directories are registered with ProcessWire's `ClassLoader` under `Htmx\Component` and/or `Htmx\Ui`.
+1. When the Htmx module initializes, it scans all installed modules that declare `'requires' => ['Htmx']` in their module info, resolving the real directory even when the module folder name differs from the module class name.
+2. For each qualifying module, it checks for `components/` and/or `ui/` directories in the module root and registers them via `registerModulePaths()`.
+3. Modules can also register their `components/` and `ui/` directories and component aliases explicitly at boot via `$htmx->registerModulePaths(__DIR__, ['MyComponent' => 'Htmx\\Component\\MyComponent'])`.
 
 **Result:** During HTMX AJAX requests to `/hx/req`, the endpoint can resolve and instantiate component classes from any Htmx-dependent module — even if that module is not autoloaded.
 
