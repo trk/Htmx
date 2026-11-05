@@ -7,8 +7,9 @@ namespace Totoglu\Htmx\Tests\Unit;
 /**
  * Self-contained module boundary & dependency scanner.
  *
- * Verifies that this module only references its own classes/namespaces and its
- * declared lower-layer dependencies, without hardcoding sibling or upper-layer module names.
+ * Verifies that this module only references its own classes/namespaces, paths,
+ * CSS/JS prefixes, and declared lower-layer dependencies, without hardcoding
+ * sibling or upper-layer module names.
  */
 final class LayeringScanner
 {
@@ -17,13 +18,19 @@ final class LayeringScanner
 	public const string MAIN_MODULE = 'Htmx';
 
 	/** @var list<string> Only this module and its allowed lower-layer dependencies. */
-	public const array ALLOWED_MODULES = ['Htmx'];
+	public const array ALLOWED_MODULES = ["Htmx"];
 
 	/** @var list<string> Direct module dependencies that MAIN_MODULE must declare in getModuleInfo()['requires']. */
 	public const array REQUIRED_DIRECT = [];
 
+	/** @var list<string> Allowed short CSS/data-* prefixes for this module and its lower layers. */
+	public const array ALLOWED_PREFIXES = ["hx-"];
+
+	/** Whether optional sibling adapters under src/Integration/<Target>/ are permitted in this layer. */
+	public const bool ALLOW_SIBLING_INTEGRATIONS = false;
+
 	/** @var list<string> Third-party code shipped inside the module, relative to the module root. */
-	public const array VENDORED_PATHS = ['resources/htmx/', 'resources/_hyperscript/'];
+	public const array VENDORED_PATHS = ["resources\/htmx\/","resources\/_hyperscript\/"];
 
 	/** @var list<string> */
 	public const array KNOWN_VIOLATIONS = [];
@@ -117,7 +124,7 @@ final class LayeringScanner
 	}
 
 	/**
-	 * Module and component/ui class names owned by an allowed module.
+	 * Module and component/ui class names owned by a module directory.
 	 *
 	 * @return list<string>
 	 */
@@ -150,7 +157,7 @@ final class LayeringScanner
 	}
 
 	/**
-	 * Scan all module files for references outside ALLOWED_MODULES (except under src/Integration/<Target>/).
+	 * Scan all module files for references outside ALLOWED_MODULES.
 	 *
 	 * @return array<string, string>
 	 */
@@ -165,9 +172,20 @@ final class LayeringScanner
 		}
 		$allowedModuleClasses = array_values(array_unique($allowedModuleClasses));
 
+		$disallowedModules = [];
+		foreach (glob(dirname(self::moduleRoot()) . '/*', GLOB_ONLYDIR) ?: [] as $siblingDir) {
+			$otherMod = basename($siblingDir);
+			if (!str_starts_with($otherMod, 'Wire') && $otherMod !== 'Htmx') {
+				continue;
+			}
+			if (!in_array($otherMod, self::ALLOWED_MODULES, true)) {
+				$disallowedModules[] = $otherMod;
+			}
+		}
+
 		foreach ($files as $path => $contents) {
 			$integrationTarget = null;
-			if (preg_match('#^src/Integration/([A-Za-z0-9_]+)/#', $path, $intMatch) === 1) {
+			if (self::ALLOW_SIBLING_INTEGRATIONS && preg_match('#^src/Integration/([A-Za-z0-9_]+)/#', $path, $intMatch) === 1) {
 				$integrationTarget = $intMatch[1];
 			}
 
@@ -182,13 +200,32 @@ final class LayeringScanner
 				}
 			}
 
-			// 2. Check references to classes owned by other installed modules in site/modules/
-			foreach (glob(dirname(self::moduleRoot()) . '/*', GLOB_ONLYDIR) ?: [] as $siblingDir) {
-				$otherMod = basename($siblingDir);
-				if (in_array($otherMod, self::ALLOWED_MODULES, true) || $otherMod === $integrationTarget) {
+			// 2. Check cross-module path references to other installed modules in site/modules/
+			foreach ($disallowedModules as $otherMod) {
+				if ($otherMod === $integrationTarget) {
 					continue;
 				}
-				if (!str_starts_with($otherMod, 'Wire') && $otherMod !== 'Htmx') {
+				if (preg_match('#/' . preg_quote($otherMod, '#') . '/#', $contents, $pMatch, PREG_OFFSET_CAPTURE) === 1) {
+					self::recordOffset($violations, $path, 'path:' . $otherMod, $pMatch[0][0], $pMatch[0][1], $contents);
+				}
+			}
+
+			// 3. Check CSS / data-* / pw-w*- prefix leaks from disallowed modules
+			if (preg_match_all('/(?:(?<=[.#])(?:pw-)?(w[a-z]-)|\b(?<=[.#\'"\s])pw-(w[a-z]-)|\bdata-(?:pw-)?(w[a-z]-))[a-z][a-z0-9-]*/', $contents, $prefMatches, PREG_OFFSET_CAPTURE) > 0) {
+				foreach ($prefMatches[0] as $idx => $fullMatch) {
+					$shortPrefix = $prefMatches[1][$idx][0] !== ''
+						? $prefMatches[1][$idx][0]
+						: ($prefMatches[2][$idx][0] !== '' ? $prefMatches[2][$idx][0] : $prefMatches[3][$idx][0]);
+					if (in_array($shortPrefix, self::ALLOWED_PREFIXES, true)) {
+						continue;
+					}
+					self::recordOffset($violations, $path, 'prefix:' . $shortPrefix, $fullMatch[0], $fullMatch[1], $contents);
+				}
+			}
+
+			// 4. Check references to classes owned by other installed modules in site/modules/
+			foreach ($disallowedModules as $otherMod) {
+				if ($otherMod === $integrationTarget) {
 					continue;
 				}
 				foreach (self::ownedNames($otherMod) as $otherClass) {
@@ -218,9 +255,10 @@ final class LayeringScanner
 	 */
 	public static function requiresViolations(array $files): array
 	{
-		$allowed = ['PHP', 'ProcessWire'];
-		foreach (self::ALLOWED_MODULES as $module) {
-			$allowed = array_merge($allowed, self::ownedNames($module));
+		$allowedForMain = array_merge(['PHP', 'ProcessWire'], self::REQUIRED_DIRECT);
+		$allowedForCompanions = array_merge($allowedForMain, self::ownedNames(self::MODULE));
+		foreach (self::REQUIRED_DIRECT as $directMod) {
+			$allowedForCompanions = array_merge($allowedForCompanions, self::ownedNames($directMod));
 		}
 
 		$violations = [];
@@ -229,12 +267,13 @@ final class LayeringScanner
 				continue;
 			}
 			$requires = self::parseRequires($contents);
+			$isMainModule = $path === self::MAIN_MODULE . '.module.php';
+			$allowed = $isMainModule ? $allowedForMain : $allowedForCompanions;
 			foreach ($requires as $requirement) {
 				if (!in_array($requirement, $allowed, true)) {
 					$violations[$path . '|requires:' . $requirement] = $path . ": 'requires' lists " . $requirement;
 				}
 			}
-			$isMainModule = $path === self::MAIN_MODULE . '.module.php';
 			if ($isMainModule) {
 				foreach (self::REQUIRED_DIRECT as $direct) {
 					if (!in_array($direct, $requires, true)) {
