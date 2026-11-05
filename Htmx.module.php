@@ -1445,7 +1445,7 @@ HTML;
 
 			$dependsOnHtmx = false;
 			foreach ($requires as $req) {
-				if (is_string($req) && stripos($req, 'Htmx') === 0) {
+				if (is_string($req) && (stripos($req, 'Htmx') === 0 || stripos($req, 'WireKit') === 0)) {
 					$dependsOnHtmx = true;
 					break;
 				}

@@ -116,4 +116,8 @@ jobs:
           echo "" >> release_notes.md
           echo "**Full Changelog**: $COMPARE_URL" >> release_notes.md
 
-          gh release create "$TAG" -F release_notes.md --title "$TAG"
+          REPO_NAME="${REPO#*/}"
+          ZIP_FILE="${REPO_NAME}.zip"
+          git archive --format=zip --prefix="${REPO_NAME}/" -o "$ZIP_FILE" HEAD
+
+          gh release create "$TAG" "$ZIP_FILE" -F release_notes.md --title "$TAG"
