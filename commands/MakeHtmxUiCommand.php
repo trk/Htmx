@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Totoglu\Htmx\Commands;
 
-require_once __DIR__ . '/MakeHtmxComponentCommand.php';
-
 class MakeHtmxUiCommand extends MakeHtmxComponentCommand
 {
 	protected string $commandName = 'make:htmx:ui';
