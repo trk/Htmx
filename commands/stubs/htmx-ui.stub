@@ -10,37 +10,95 @@ class {{className}} extends Ui
 {
 	public string $name = '{{slug}}';
 
-	public array $defaultParams = [
-		// 'message' => 'Default message',
-		// 'variant' => 'primary',
+	/**
+	 * Structural parameters included in the compiled HtmxCache Shape hash.
+	 *
+	 * @var array<string, mixed>
+	 */
+	public array $shapeParams = [
+		'tag' => 'div',
+		'variant' => 'default',
 	];
 
-	public function render(): string
+	/**
+	 * Dynamic slot content parameters injected at runtime into `$s[...]` (excluded from Shape hash).
+	 *
+	 * @var array<string, mixed>
+	 */
+	public array $slotParams = [
+		'title' => '',
+		'body' => '',
+	];
+
+	/**
+	 * Component-defined layout zones (flat list or grouped map).
+	 *
+	 * @var array<int|string, string|array<int, string>>
+	 */
+	protected array $zones = [
+		'left',
+		'center',
+		'right',
+	];
+
+	/**
+	 * Default item-to-zone placements.
+	 *
+	 * @var array<string, string>
+	 */
+	protected array $defaultZones = [
+		'title' => 'center',
+		'body' => 'center',
+	];
+
+	/**
+	 * Value Gate keys: if non-empty, at least one key (or `$this->children`) must have a value
+	 * for the element to render; otherwise `renderIfHasValue()` returns `''` without touching cache.
+	 *
+	 * @var array<int, string>
+	 */
+	protected array $valueGateKeys = ['title', 'body'];
+
+	/**
+	 * Phase 1 (Cache Miss Only): Resolve structural classes and tags before compiling the template.
+	 *
+	 * @return array<string, mixed>
+	 */
+	protected function resolveShape(): array
 	{
-		// HTMX v4 Ui helpers (chainable fluent API):
-		// $this->action('/submit')->method('post');              // hx-action + hx-method
-		// $this->query('/search');                              // hx-query
-		// $this->config(['history' => false]);                  // hx-config (JSON encoded)
-		// $this->ignore();                                      // hx-ignore (skip htmx processing)
-		// $this->disable();                                     // hx-disable (disable UI during request)
-		// $this->validate();                                    // hx-validate
-		// $this->status(422, 'swap:outerMorph target:#errors'); // hx-status:422
-		// $this->actionTrigger('save');                         // submit with __htmx_action=save
-		// $this->swap('outerMorph')->target('#wrapper');        // hx-swap, hx-target
+		$variant = (string) $this->parameters->get('variant', 'default');
+		$this->prependClass(['ui-{{slug}}', "ui-{{slug}}-{$variant}"]);
 
-		// Parameter access (strict typed):
-		// $this->parameters->getString('message');
-		// $this->parameters->getInt('count');
-		// $this->parameters->getBool('enabled');
-		// $this->parameters->getArray('items');
-		// $this->param('message');  // mixed, quick access
+		$shape = parent::resolveShape();
+		$shape['tag'] = (string) $this->parameters->get('tag', 'div');
+		return $shape;
+	}
 
-		// Attribute manipulation (chainable):
-		// $this->attributes->addClass('uk-card')->id('my-id');
+	/**
+	 * Phase 1 (Cache Miss Only): Return the compiled PHP closure source for `HtmxCache`.
+	 *
+	 * @param array<string, mixed> $shape
+	 */
+	protected function compileTemplate(array $shape): string
+	{
+		$tag = (string) ($shape['tag'] ?? 'div');
+		$open = self::compileOpenTag($tag, (string) ($shape['classAttr'] ?? ''));
+		$close = var_export("</{$tag}>", true);
+		$zoneMap = $shape['zoneMap'] ?? [];
 
-		return "<div {$this->attributes->render()}>
-			<!-- Your Ui markup here -->
-			{$this->renderChildren()}
-		</div>";
+		$leftExpr = self::compileZoneItemsExpr($zoneMap['left'] ?? []);
+		$centerExpr = self::compileZoneItemsExpr($zoneMap['center'] ?? []);
+		$rightExpr = self::compileZoneItemsExpr($zoneMap['right'] ?? []);
+
+		return "static function (array \$s, array \$attrs, string \$children): string {\n"
+			. "\t\$html = {$open};\n"
+			. "\t\$left = {$leftExpr};\n"
+			. "\t\$center = {$centerExpr} . \$children;\n"
+			. "\t\$right = {$rightExpr};\n"
+			. "\tif (\$left !== '') { \$html .= '<div class=\"ui-{{slug}}-left\">' . \$left . '</div>'; }\n"
+			. "\tif (\$center !== '') { \$html .= '<div class=\"ui-{{slug}}-center\">' . \$center . '</div>'; }\n"
+			. "\tif (\$right !== '') { \$html .= '<div class=\"ui-{{slug}}-right\">' . \$right . '</div>'; }\n"
+			. "\treturn \$html . {$close};\n"
+			. "}";
 	}
 }

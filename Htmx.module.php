@@ -8,6 +8,7 @@ use Totoglu\Htmx\Request;
 use Totoglu\Htmx\Response;
 use Totoglu\Htmx\Fragment;
 use Totoglu\Htmx\Component;
+use Totoglu\Htmx\Cache\HtmxCache;
 use Totoglu\Htmx\Debug\HtmxTracyPanel;
 
 /**
@@ -35,6 +36,8 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	public Response $response;
 
 	public Fragment $fragment;
+
+	public HtmxCache $cache;
 
 	/** @var array<string, string> component alias map */
 	protected array $components = [];
@@ -94,6 +97,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	{
 		parent::__construct();
 		$this->wire()->classLoader->addNamespace('Totoglu\\Htmx', __DIR__ . '/src/');
+		$this->wire()->classLoader->addNamespace('Totoglu\\Htmx\\Commands', __DIR__ . '/commands/');
 
 		$this->set('loadFrontendAssets', true);
 		$this->set('loadHyperscript', false);
@@ -109,11 +113,16 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		$this->set('lifecycleEventPrefix', 'pw-htmx');
 		$this->set('extensions', []);
 		$this->set('tracySupport', true);
+		$this->set('cacheEnabled', true);
+		$this->set('cacheMaxShapesPerClass', 64);
+
+		$this->cache = new HtmxCache();
 	}
 
 	public function wired(): void
 	{
 		$this->wire('htmx', $this);
+		$this->wire('htmxCache', $this->cache);
 	}
 
 	public function init(): void
@@ -121,6 +130,10 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		$this->request = new Request();
 		$this->response = new Response();
 		$this->fragment = new Fragment();
+
+		$this->cache->setEnabled((bool) $this->cacheEnabled);
+		$this->cache->setMaxShapesPerClass(max(4, (int) ($this->cacheMaxShapesPerClass ?: 64)));
+		$this->wire('htmxCache', $this->cache);
 
 		$config = $this->wire()->config;
 		$classLoader = $this->wire()->classLoader;
@@ -187,6 +200,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 			if ($cache) {
 				$cache->delete('htmx.module-components');
 			}
+			$this->cache->prune();
 		});
 
 		$this->wire()->addHookAfter('Page::render', function (HookEvent $e): void {
@@ -527,9 +541,7 @@ HTML;
 			$tHydrate = microtime(true);
 			/** @var Config|null $config */
 			$config = $this->wire()->config;
-			$beforeScripts = $config && $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
-			$beforeStyles = $config && $config->styles ? array_values(iterator_to_array($config->styles)) : [];
-			$beforeJs = $config && is_array($config->js()) ? $config->js() : [];
+			$beforeAssets = self::snapshotConfigAssets($config);
 			$this->emittedFragmentScripts = [];
 			$this->emittedFragmentStyles = [];
 			$this->emittedFragmentJsKeys = [];
@@ -546,24 +558,22 @@ HTML;
 			$html = $cmp->renderToString();
 			$tAfterRender = microtime(true);
 
-			$afterScripts = $config && $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
-			$afterStyles = $config && $config->styles ? array_values(iterator_to_array($config->styles)) : [];
-			$afterJs = $config && is_array($config->js()) ? $config->js() : [];
+			$assetDiff = self::diffConfigAssets(
+				$beforeAssets,
+				$config,
+				$this->emittedFragmentScripts,
+				$this->emittedFragmentStyles,
+				$this->emittedFragmentJsKeys
+			);
 
-			$newScripts = array_values(array_diff($afterScripts, $beforeScripts, $this->emittedFragmentScripts));
-			$newStyles = array_values(array_diff($afterStyles, $beforeStyles, $this->emittedFragmentStyles));
-			$newJsConfig = array_diff_key($afterJs, $beforeJs, $this->emittedFragmentJsKeys);
-
-			if ($newScripts !== [] || $newStyles !== [] || $newJsConfig !== []) {
-				$assetPayload = [
-					'jsConfig' => $afterJs,
-					'newJsConfig' => $newJsConfig,
-					'scripts' => $newScripts,
-					'styles' => $newStyles,
-				];
-				$assetJson = json_encode($assetPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
-				if (is_string($assetJson) && $assetJson !== '') {
-					$configScript = "\n<script type=\"application/json\" data-pw-htmx-config>{$assetJson}</script>";
+			if ($assetDiff['newScripts'] !== [] || $assetDiff['newStyles'] !== [] || $assetDiff['newJsConfig'] !== []) {
+				$configScript = $this->buildAssetConfigScript(
+					$assetDiff['afterJs'],
+					$assetDiff['newJsConfig'],
+					$assetDiff['newScripts'],
+					$assetDiff['newStyles']
+				);
+				if ($configScript !== '') {
 					$replaceCount = 0;
 					$injected = preg_replace('/(<\/[a-zA-Z0-9_-]+\s*>\s*)$/', $configScript . '$1', $html, 1, $replaceCount);
 					if (is_string($injected) && $replaceCount > 0) {
@@ -709,6 +719,7 @@ HTML;
 
 		$data['debugEnabled'] = (bool) ($this->wire()->config->debug ?? false);
 		$data['tracySupport'] = (bool) $this->tracySupport;
+		$data['cacheStats'] = $this->cache->stats();
 
 		return $data;
 	}
@@ -856,7 +867,7 @@ HTML;
 			/** @var Component $cmp */
 			$cmp = new $class();
 
-			$shortName = (new \ReflectionClass($cmp))->getShortName();
+			$shortName = basename(str_replace('\\', '/', $class));
 			if (($this->components[$shortName] ?? null) !== $class) {
 				$this->registerComponent($shortName, $class);
 			}
@@ -1049,9 +1060,7 @@ HTML;
 		$spacing = (int) ($config->inputfieldColumnWidthSpacing ?? 0);
 		$wrapper->set('columnWidthSpacing', $spacing);
 
-		$beforeScripts = $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
-		$beforeStyles = $config->styles ? array_values(iterator_to_array($config->styles)) : [];
-		$beforeJs = is_array($config->js()) ? $config->js() : [];
+		$beforeAssets = self::snapshotConfigAssets($config);
 
 		$wrapper->renderReady(null, $renderValueMode);
 		$hasLanguageFields = false;
@@ -1091,24 +1100,81 @@ HTML;
 
 		$html = $renderValueMode ? $wrapper->renderValue() : $wrapper->render();
 
-		$afterScripts = $config->scripts ? array_values(iterator_to_array($config->scripts)) : [];
-		$afterStyles = $config->styles ? array_values(iterator_to_array($config->styles)) : [];
-		$afterJs = is_array($config->js()) ? $config->js() : [];
+		$assetDiff = self::diffConfigAssets($beforeAssets, $config);
 
-		$newScripts = array_values(array_diff($afterScripts, $beforeScripts));
-		$newStyles = array_values(array_diff($afterStyles, $beforeStyles));
-		$newJsConfig = array_diff_key($afterJs, $beforeJs);
-
-		foreach ($newScripts as $scriptUrl) {
+		foreach ($assetDiff['newScripts'] as $scriptUrl) {
 			$this->emittedFragmentScripts[] = $scriptUrl;
 		}
-		foreach ($newStyles as $styleUrl) {
+		foreach ($assetDiff['newStyles'] as $styleUrl) {
 			$this->emittedFragmentStyles[] = $styleUrl;
 		}
-		foreach (array_keys($newJsConfig) as $jsKey) {
+		foreach (array_keys($assetDiff['newJsConfig']) as $jsKey) {
 			$this->emittedFragmentJsKeys[(string) $jsKey] = true;
 		}
 
+		$configScript = $this->buildAssetConfigScript(
+			$assetDiff['afterJs'],
+			$assetDiff['newJsConfig'],
+			$assetDiff['newScripts'],
+			$assetDiff['newStyles']
+		);
+		if ($configScript !== '') {
+			$html .= $configScript;
+		}
+
+		return $html;
+	}
+
+	/**
+	 * Capture the current `$config->scripts`, `$config->styles`, and `$config->js()` snapshot.
+	 *
+	 * @return array{scripts: list<string>, styles: list<string>, js: array<string, mixed>}
+	 */
+	public static function snapshotConfigAssets(?Config $config): array
+	{
+		return [
+			'scripts' => $config && $config->scripts ? array_values(iterator_to_array($config->scripts)) : [],
+			'styles' => $config && $config->styles ? array_values(iterator_to_array($config->styles)) : [],
+			'js' => $config && is_array($config->js()) ? $config->js() : [],
+		];
+	}
+
+	/**
+	 * Compute newly added scripts, styles, and JS config entries against a previous snapshot.
+	 *
+	 * @param array{scripts: list<string>, styles: list<string>, js: array<string, mixed>} $before
+	 * @param list<string> $excludeScripts
+	 * @param list<string> $excludeStyles
+	 * @param array<string, bool> $excludeJsKeys
+	 * @return array{afterJs: array<string, mixed>, newScripts: list<string>, newStyles: list<string>, newJsConfig: array<string, mixed>}
+	 */
+	public static function diffConfigAssets(
+		array $before,
+		?Config $config,
+		array $excludeScripts = [],
+		array $excludeStyles = [],
+		array $excludeJsKeys = []
+	): array {
+		$after = self::snapshotConfigAssets($config);
+
+		return [
+			'afterJs' => $after['js'],
+			'newScripts' => array_values(array_diff($after['scripts'], $before['scripts'], $excludeScripts)),
+			'newStyles' => array_values(array_diff($after['styles'], $before['styles'], $excludeStyles)),
+			'newJsConfig' => array_diff_key($after['js'], $before['js'], $excludeJsKeys),
+		];
+	}
+
+	/**
+	 * Build the `<script type="application/json" data-pw-htmx-config>` tag for dynamic asset & JS config deltas.
+	 *
+	 * @param array<string, mixed> $afterJs
+	 * @param array<string, mixed> $newJsConfig
+	 * @param list<string> $newScripts
+	 * @param list<string> $newStyles
+	 */
+	private function buildAssetConfigScript(array $afterJs, array $newJsConfig, array $newScripts, array $newStyles): string
+	{
 		$payload = [
 			'jsConfig' => $afterJs,
 			'newJsConfig' => $newJsConfig,
@@ -1117,11 +1183,11 @@ HTML;
 		];
 
 		$json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
-		if (is_string($json) && $json !== '') {
-			$html .= "\n<script type=\"application/json\" data-pw-htmx-config>{$json}</script>";
+		if (!is_string($json) || $json === '') {
+			return '';
 		}
 
-		return $html;
+		return "\n<script type=\"application/json\" data-pw-htmx-config>{$json}</script>";
 	}
 
 	/**
@@ -1380,6 +1446,58 @@ HTML;
 		$f->attr('value', $this->getNormalizedExtensions());
 		$inputfields->add($f);
 
+		$input = $this->wire()->input;
+		if ($input && $input->post('_htmx_cache_action')) {
+			$cacheAction = (string) $input->post('_htmx_cache_action');
+			if ($cacheAction === 'clear') {
+				$removed = $this->cache->clear();
+				$this->message(sprintf($this->_('HtmxCache cleared (%d compiled cache files removed).'), $removed));
+			} elseif ($cacheAction === 'prune') {
+				$pruned = $this->cache->prune();
+				$this->message(sprintf($this->_('HtmxCache pruned (%d stale cache files removed).'), $pruned));
+			}
+		}
+
+		$cacheFs = $modules->get('InputfieldFieldset');
+		$cacheFs->label = $this->_('HtmxCache — UI & Component Compilation Cache');
+		$cacheFs->icon = 'bolt';
+
+		$f = $modules->get('InputfieldCheckbox');
+		$f->attr('name', 'cacheEnabled');
+		$f->label = $this->_('Enable HtmxCache Compilation');
+		$f->description = $this->_('Compiles UI element shapes, zone layouts, and Component reflection schemas into OPcache-backed PHP files under `site/assets/cache/Htmx/`.');
+		$f->checked = (bool) $this->cacheEnabled;
+		$f->columnWidth = 50;
+		$cacheFs->add($f);
+
+		$f = $modules->get('InputfieldInteger');
+		$f->attr('name', 'cacheMaxShapesPerClass');
+		$f->label = $this->_('Max Compiled Shapes per UI Class (LRU Cap)');
+		$f->description = $this->_('Maximum number of compiled `.php` shape variants retained per UI class before older unused shapes are automatically evicted.');
+		$f->value = max(4, (int) ($this->cacheMaxShapesPerClass ?: 64));
+		$f->columnWidth = 50;
+		$cacheFs->add($f);
+
+		$stats = $this->cache->stats();
+		$kb = number_format($stats['bytes'] / 1024, 2);
+		$f = $modules->get('InputfieldRadios');
+		$f->attr('name', '_htmx_cache_action');
+		$f->label = $this->_('Cache Maintenance');
+		$f->description = sprintf(
+			$this->_('Active cache directory: `%1$s` — UI shape files: %2$d, Component cache files: %3$d, Total size: %4$s KB.'),
+			$stats['baseDir'],
+			$stats['uiFiles'],
+			$stats['componentFiles'],
+			$kb
+		);
+		$f->addOption('', $this->_('No action'));
+		$f->addOption('prune', $this->_('Prune stale cache files'));
+		$f->addOption('clear', $this->_('Clear all compiled cache files'));
+		$f->attr('value', '');
+		$cacheFs->add($f);
+
+		$inputfields->add($cacheFs);
+
 		return $inputfields;
 	}
 
@@ -1517,7 +1635,11 @@ HTML;
 
 	public function ___uninstall(): void
 	{
+		if (isset($this->cache)) {
+			$this->cache->clear();
+		}
 		$this->wire()?->cache?->delete('htmx.module-components');
 		$this->wire()?->fuel?->remove('htmx');
+		$this->wire()?->fuel?->remove('htmxCache');
 	}
 }

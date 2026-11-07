@@ -5,20 +5,21 @@ declare(strict_types=1);
 namespace Totoglu\Htmx;
 
 use ReflectionClass;
+use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
-use ReflectionType;
 use ProcessWire\Htmx;
 use ProcessWire\Page;
 use ProcessWire\PageArray;
 use ProcessWire\WireData;
 use ProcessWire\WireException;
+use Totoglu\Htmx\Cache\HtmxCache;
 
 /**
  * Component
  * Base class for building state-aware HTMX v4 widgets in ProcessWire.
- * Auto-hydrates public properties using Reflection, validates HMAC and State TTL,
- * and offers an Action Dispatcher (`executeAction`).
+ * Auto-hydrates public properties using compiled Reflection schemas, validates HMAC and State TTL,
+ * and offers an Action Dispatcher (`executeAction`) and opt-in tokenized Render Caching.
  *
  * HTMX v4 Support:
  * - GET / QUERY method actions (safe, read-only state queries prefixed with `query`)
@@ -32,6 +33,9 @@ abstract class Component extends WireData
 	public const ERR_BAD_HMAC = 1002;
 	public const ERR_INVALID_STATE = 1003;
 	public const ERR_STATE_EXPIRED = 1004;
+
+	private const STATE_PAYLOAD_TOKEN = '<!--__HTMX_STATE_PAYLOAD__-->';
+	private const INSTANCE_ID_TOKEN = '__HTMX_CMP_ID__';
 
 	protected string $stateKey = 'hx__state';
 
@@ -47,6 +51,16 @@ abstract class Component extends WireData
 	 * Overrides the global HTMX module endpoint URL specifically for this component.
 	 */
 	protected string $endpointUrl = '';
+
+	/**
+	 * Opt-in tokenized component render cache flag.
+	 */
+	protected bool $cacheRender = false;
+
+	/**
+	 * TTL in seconds for opt-in component render cache entries.
+	 */
+	protected int $cacheTtl = 3600;
 
 	/**
 	 * Unique identity for this specific component instance to prevent
@@ -65,6 +79,11 @@ abstract class Component extends WireData
 	private static array $reflectionCache = [];
 
 	/**
+	 * @var array<class-string, array<string, mixed>> Local fallback schema cache when HtmxCache is unavailable
+	 */
+	private static array $localSchemaCache = [];
+
+	/**
 	 * @var array<string, mixed>|null Pre-verified state payload injected by endpoint dispatcher
 	 */
 	private ?array $preDecodedState = null;
@@ -80,6 +99,26 @@ abstract class Component extends WireData
 	private bool $hasExplicitId = false;
 
 	/**
+	 * @var bool Whether a POST state-mutating action executed during this request lifecycle
+	 */
+	private bool $actionMutated = false;
+
+	/**
+	 * @var bool Whether `validationError()` was triggered during this request lifecycle
+	 */
+	private bool $validationFailed = false;
+
+	/**
+	 * @var bool Internal flag active while capturing tokenized HTML for the component render cache
+	 */
+	private bool $isCapturingRenderCache = false;
+
+	/**
+	 * @var int Captured TTL hours passed to `renderStatePayload()` during render cache capture
+	 */
+	private int $capturedStateTtlHours = 24;
+
+	/**
 	 * Inject a pre-verified state payload from the endpoint dispatcher to avoid redundant HMAC/JSON work.
 	 *
 	 * @param array<string, mixed>|null $decoded
@@ -87,6 +126,16 @@ abstract class Component extends WireData
 	public function setPreDecodedState(?array $decoded): self
 	{
 		$this->preDecodedState = $decoded;
+		return $this;
+	}
+
+	/**
+	 * Enable or disable opt-in tokenized render caching for this component.
+	 */
+	public function enableRenderCache(bool $enable = true, int $ttl = 3600): self
+	{
+		$this->cacheRender = $enable;
+		$this->cacheTtl = max(1, $ttl);
 		return $this;
 	}
 
@@ -111,6 +160,144 @@ abstract class Component extends WireData
 	}
 
 	/**
+	 * Resolve the active `HtmxCache` service instance.
+	 */
+	protected function getHtmxCache(): ?HtmxCache
+	{
+		return HtmxCache::resolve($this->htmx);
+	}
+
+	/**
+	 * Retrieve the compiled property & action reflection schema for this component class.
+	 * Uses `HtmxCache` file/OPcache compilation when available, falling back to an in-memory static map.
+	 *
+	 * @return array{
+	 *     properties: array<string, array{isBuiltin: bool, typeName: string|null, allowsNull: bool}>,
+	 *     actions: array<string, array{name: string, params: list<array{name: string, isBuiltin: bool, typeName: string|null, allowsNull: bool, pwApiVar: string|null, hasDefault: bool, default: mixed}>}>,
+	 *     actionMap: array<string, string>
+	 * }
+	 */
+	protected function getCompiledSchema(): array
+	{
+		$class = static::class;
+		$cache = $this->getHtmxCache();
+		if ($cache !== null) {
+			/** @var array{properties: array<string, array{isBuiltin: bool, typeName: string|null, allowsNull: bool}>, actions: array<string, array{name: string, params: list<array{name: string, isBuiltin: bool, typeName: string|null, allowsNull: bool, pwApiVar: string|null, hasDefault: bool, default: mixed}>}>, actionMap: array<string, string>} $schema */
+			$schema = $cache->getOrCompileComponentSchema(
+				$class,
+				static fn(): array => self::buildReflectionSchema($class)
+			);
+			return $schema;
+		}
+
+		if (!isset(self::$localSchemaCache[$class])) {
+			self::$localSchemaCache[$class] = self::buildReflectionSchema($class);
+		}
+
+		/** @var array{properties: array<string, array{isBuiltin: bool, typeName: string|null, allowsNull: bool}>, actions: array<string, array{name: string, params: list<array{name: string, isBuiltin: bool, typeName: string|null, allowsNull: bool, pwApiVar: string|null, hasDefault: bool, default: mixed}>}>, actionMap: array<string, string>} */
+		return self::$localSchemaCache[$class];
+	}
+
+	/**
+	 * Build the serializable property and action reflection schema for a Component subclass.
+	 * Executed only once on cache miss.
+	 *
+	 * @param class-string $class
+	 * @return array<string, mixed>
+	 */
+	protected static function buildReflectionSchema(string $class): array
+	{
+		$ref = self::$reflectionCache[$class] ??= new ReflectionClass($class);
+
+		$properties = [];
+		foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
+			$propType = $prop->getType();
+			$isBuiltin = false;
+			$typeName = null;
+			$allowsNull = true;
+
+			if ($propType instanceof ReflectionNamedType) {
+				$isBuiltin = $propType->isBuiltin();
+				$typeName = $propType->getName();
+				$allowsNull = $propType->allowsNull();
+			}
+
+			$properties[$prop->getName()] = [
+				'isBuiltin' => $isBuiltin,
+				'typeName' => $typeName,
+				'allowsNull' => $allowsNull,
+			];
+		}
+
+		$actions = [];
+		$actionMap = [];
+
+		foreach ($ref->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+			$methodName = $method->getName();
+			if (str_starts_with($methodName, '_')) {
+				continue;
+			}
+			$declaring = $method->getDeclaringClass();
+			if (!$declaring->isSubclassOf(self::class)) {
+				continue;
+			}
+
+			$params = [];
+			foreach ($method->getParameters() as $param) {
+				$pType = $param->getType();
+				$isBuiltin = false;
+				$typeName = null;
+				$allowsNull = true;
+				$pwApiVar = null;
+
+				if ($pType instanceof ReflectionNamedType) {
+					$isBuiltin = $pType->isBuiltin();
+					$typeName = $pType->getName();
+					$allowsNull = $pType->allowsNull();
+
+					if (!$isBuiltin && str_starts_with($typeName, 'ProcessWire\\')) {
+						$shortName = substr(strrchr('\\' . $typeName, '\\'), 1);
+						$pwApiVar = strtolower($shortName);
+					}
+				}
+
+				$hasDefault = $param->isDefaultValueAvailable();
+				$defaultVal = null;
+				if ($hasDefault) {
+					$candidateDefault = $param->getDefaultValue();
+					if (is_scalar($candidateDefault) || is_array($candidateDefault) || $candidateDefault === null) {
+						$defaultVal = $candidateDefault;
+					} else {
+						$hasDefault = false;
+					}
+				}
+
+				$params[] = [
+					'name' => $param->getName(),
+					'isBuiltin' => $isBuiltin,
+					'typeName' => $typeName,
+					'allowsNull' => $allowsNull,
+					'pwApiVar' => $pwApiVar,
+					'hasDefault' => $hasDefault,
+					'default' => $defaultVal,
+				];
+			}
+
+			$actions[$methodName] = [
+				'name' => $methodName,
+				'params' => $params,
+			];
+			$actionMap[strtolower($methodName)] = $methodName;
+		}
+
+		return [
+			'properties' => $properties,
+			'actions' => $actions,
+			'actionMap' => $actionMap,
+		];
+	}
+
+	/**
 	 * Accessor for the component's unique instance ID.
 	 */
 	public function id(): string
@@ -132,7 +319,7 @@ abstract class Component extends WireData
 
 	/**
 	 * Helper to mass-assign properties to the component.
-	 * Uses type coercion for strict_types compatibility with public typed properties.
+	 * Uses compiled schema type coercion for strict_types compatibility with public typed properties.
 	 *
 	 * @param array<string, mixed> $props
 	 */
@@ -141,32 +328,34 @@ abstract class Component extends WireData
 		if (isset($props['id']) && is_scalar($props['id']) && (string) $props['id'] !== '') {
 			$this->hasExplicitId = true;
 		}
-		$ref = self::getReflection();
+
+		$schema = $this->getCompiledSchema();
+		$propSchemas = $schema['properties'];
+
 		foreach ($props as $k => $v) {
-			if ($ref->hasProperty($k)) {
-				$prop = $ref->getProperty($k);
-				if ($prop->isPublic()) {
-					$propType = $prop->getType();
-					if ($propType instanceof ReflectionNamedType && !$propType->isBuiltin()) {
-						$this->{$k} = $v;
-					} else {
-						$this->{$k} = $this->coerceValue($v, $propType);
-					}
-				}
+			if (!isset($propSchemas[$k])) {
+				continue;
+			}
+			$meta = $propSchemas[$k];
+			if ($meta['typeName'] !== null && !$meta['isBuiltin']) {
+				$this->{$k} = $v;
+			} else {
+				$this->{$k} = $this->coerceValueFromSchema($v, $meta['typeName'], $meta['isBuiltin'], $meta['allowsNull']);
 			}
 		}
+
 		return $this;
 	}
 
 	/**
-	 * Coerce a mixed value to a named scalar type for strict_types compatibility.
+	 * Coerce a mixed value using compiled schema metadata without runtime Reflection objects.
 	 */
-	private function coerceValue(mixed $value, ?ReflectionType $type): mixed
+	private function coerceValueFromSchema(mixed $value, ?string $typeName, bool $isBuiltin, bool $allowsNull): mixed
 	{
-		if (!$type instanceof ReflectionNamedType || !$type->isBuiltin()) {
+		if ($typeName === null || !$isBuiltin) {
 			return $value;
 		}
-		$typeName = $type->getName();
+
 		$isArr = is_array($value);
 
 		if ($typeName === 'int') {
@@ -176,7 +365,7 @@ abstract class Component extends WireData
 			if (is_bool($value)) {
 				return (int) $value;
 			}
-			return is_numeric($value) ? (int) $value : ($value === null && $type->allowsNull() ? null : 0);
+			return is_numeric($value) ? (int) $value : ($value === null && $allowsNull ? null : 0);
 		}
 		if ($typeName === 'float') {
 			if ($isArr) {
@@ -185,19 +374,19 @@ abstract class Component extends WireData
 			if (is_bool($value)) {
 				return (float) $value;
 			}
-			return is_numeric($value) ? (float) $value : ($value === null && $type->allowsNull() ? null : 0.0);
+			return is_numeric($value) ? (float) $value : ($value === null && $allowsNull ? null : 0.0);
 		}
 		if ($typeName === 'bool') {
 			if ($isArr) {
 				return false;
 			}
-			return $value === null && $type->allowsNull() ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
+			return $value === null && $allowsNull ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
 		}
 		if ($typeName === 'string') {
 			if ($isArr) {
 				return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 			}
-			if ($value === null && $type->allowsNull()) {
+			if ($value === null && $allowsNull) {
 				return null;
 			}
 			return (string) $value;
@@ -206,13 +395,10 @@ abstract class Component extends WireData
 			if ($isArr) {
 				return $value;
 			}
-			if ($value === null && $type->allowsNull()) {
+			if ($value === null && $allowsNull) {
 				return null;
 			}
 			return [$value];
-		}
-		if ($typeName === 'mixed') {
-			return $value;
 		}
 
 		return $value;
@@ -307,6 +493,24 @@ abstract class Component extends WireData
 	public function mount(): void {}
 
 	/**
+	 * Decode a signed candidate payload and verify it belongs to `static::class` (and `$this->id` when explicit).
+	 *
+	 * @return array<string, mixed>|null
+	 * @throws WireException
+	 */
+	private function decodeMatchingCandidate(string $candidate, string $salt): ?array
+	{
+		$decoded = self::decodeSignedPayload($candidate, $salt);
+		if (($decoded['__cmp'] ?? null) !== static::class) {
+			return null;
+		}
+		if ($this->hasExplicitId && isset($decoded['__id']) && (string) $decoded['__id'] !== $this->id) {
+			return null;
+		}
+		return $decoded;
+	}
+
+	/**
 	 * Check whether the current request either carries no state payload for `$this->stateKey`
 	 * or carries a signed state payload belonging to `static::class`.
 	 * Used by `Htmx::renderComponent()` so sibling components on multi-component pages
@@ -333,11 +537,8 @@ abstract class Component extends WireData
 				continue;
 			}
 			try {
-				$decoded = self::decodeSignedPayload($candidate, $this->getHmacSalt());
-				if (($decoded['__cmp'] ?? null) !== static::class) {
-					continue;
-				}
-				if ($this->hasExplicitId && isset($decoded['__id']) && (string) $decoded['__id'] !== $this->id) {
+				$decoded = $this->decodeMatchingCandidate($candidate, $this->getHmacSalt());
+				if ($decoded === null) {
 					continue;
 				}
 				$this->preDecodedState = $decoded;
@@ -388,15 +589,12 @@ abstract class Component extends WireData
 						if (!is_string($candidate) || $candidate === '') {
 							continue;
 						}
-						$candDecoded = self::decodeSignedPayload($candidate, $salt);
-						if (($candDecoded['__cmp'] ?? null) !== static::class) {
-							continue;
+						$candDecoded = $this->decodeMatchingCandidate($candidate, $salt);
+						if ($candDecoded !== null) {
+							$decoded = $candDecoded;
+							$matchedCandidate = $candidate;
+							break;
 						}
-						if ($this->hasExplicitId && isset($candDecoded['__id']) && (string) $candDecoded['__id'] !== $this->id) {
-							continue;
-						}
-						$matchedCandidate = $candidate;
-						break;
 					}
 				} catch (\Throwable) {
 				}
@@ -411,17 +609,10 @@ abstract class Component extends WireData
 			if ((!is_string($payload) || $payload === '') && $this->stateKey !== 'hx__state') {
 				$fallback = $input->post('hx__state') ?? $input->get('hx__state');
 				if (is_string($fallback) && $fallback !== '') {
-					try {
-						$candDecoded = self::decodeSignedPayload($fallback, $this->getHmacSalt());
-						if (
-							($candDecoded['__cmp'] ?? null) === static::class
-							&& (!$this->hasExplicitId || !isset($candDecoded['__id']) || (string) $candDecoded['__id'] === $this->id)
-						) {
-							$decoded = $candDecoded;
-							$payload = $fallback;
-						}
-					} catch (WireException $ex) {
-						throw $ex;
+					$candDecoded = $this->decodeMatchingCandidate($fallback, $this->getHmacSalt());
+					if ($candDecoded !== null) {
+						$decoded = $candDecoded;
+						$payload = $fallback;
 					}
 				}
 			} elseif ((!is_string($payload) || $payload === '') && $this->stateKey === 'hx__state') {
@@ -433,11 +624,8 @@ abstract class Component extends WireData
 							continue;
 						}
 						try {
-							$candDecoded = self::decodeSignedPayload($v, $this->getHmacSalt());
-							if (
-								($candDecoded['__cmp'] ?? null) === static::class
-								&& (!$this->hasExplicitId || !isset($candDecoded['__id']) || (string) $candDecoded['__id'] === $this->id)
-							) {
+							$candDecoded = $this->decodeMatchingCandidate($v, $this->getHmacSalt());
+							if ($candDecoded !== null) {
 								$decoded = $candDecoded;
 								$payload = $v;
 								$this->stateKey = $k;
@@ -476,8 +664,23 @@ abstract class Component extends WireData
 
 	/**
 	 * Call this when rendering to generate the hidden payload that maintains state.
+	 * When capturing for the opt-in component render cache, returns a placeholder token
+	 * that is replaced with a freshly signed CSRF + HMAC input on every cache hit.
 	 */
 	public function renderStatePayload(int $ttlHours = 24): string
+	{
+		if ($this->isCapturingRenderCache) {
+			$this->capturedStateTtlHours = $ttlHours;
+			return self::STATE_PAYLOAD_TOKEN;
+		}
+
+		return $this->buildFreshStatePayload($ttlHours);
+	}
+
+	/**
+	 * Build the actual CSRF input and HMAC-signed `hx__state` hidden input for the current instance.
+	 */
+	private function buildFreshStatePayload(int $ttlHours = 24): string
 	{
 		$stateArray = $this->buildStateFromProperties();
 
@@ -532,6 +735,7 @@ abstract class Component extends WireData
 	 */
 	public function validationError(?string $target = null, ?string $select = null, int $httpCode = 422): void
 	{
+		$this->validationFailed = true;
 		$htmx = $this->wire()->htmx;
 		if ($htmx && $htmx->response instanceof Response) {
 			$htmx->response->validationError($target, $select, $httpCode);
@@ -592,33 +796,29 @@ abstract class Component extends WireData
 			return false;
 		}
 
-		$ref = self::getReflection();
-		if (!$ref->hasMethod($action)) {
+		if (str_starts_with($action, '_')) {
 			return false;
 		}
 
-		$methodRef = $ref->getMethod($action);
-
-		// - Prevent calling constructor, hooks, or internal magic methods directly (`_`)
-		// - Prevent arbitrary execution of base Component methods or inherited Wire/WireData methods
-		if (!$methodRef->isPublic() || str_starts_with($action, '_') || !$methodRef->getDeclaringClass()->isSubclassOf(self::class)) {
+		$schema = $this->getCompiledSchema();
+		$canonicalMethod = $schema['actionMap'][strtolower($action)] ?? null;
+		if ($canonicalMethod === null || !isset($schema['actions'][$canonicalMethod])) {
 			return false;
 		}
 
-		// Build parameters based on input data mapping to method signature
+		$actionMeta = $schema['actions'][$canonicalMethod];
+
+		// Build parameters based on input data mapping to compiled method signature
 		$args = [];
-		foreach ($methodRef->getParameters() as $param) {
-			$name = $param->getName();
-			$type = $param->getType();
+		foreach ($actionMeta['params'] as $paramMeta) {
+			$name = $paramMeta['name'];
 			$val = null;
 
-			if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
-				$className = $type->getName();
-				if (str_starts_with($className, 'ProcessWire\\')) {
-					$shortName = substr(strrchr('\\' . $className, '\\'), 1);
-					$apiName = strtolower($shortName);
+			if ($paramMeta['typeName'] !== null && !$paramMeta['isBuiltin']) {
+				$apiName = $paramMeta['pwApiVar'];
+				if ($apiName !== null) {
 					$apiVal = $this->wire()->get($apiName);
-					if (is_object($apiVal) && is_a($apiVal, $className)) {
+					if (is_object($apiVal) && is_a($apiVal, $paramMeta['typeName'])) {
 						$val = $apiVal;
 					}
 				}
@@ -627,18 +827,27 @@ abstract class Component extends WireData
 					? $input->post($name)
 					: ($isQueryMethod ? ($input->post($name) ?? $input->get($name)) : $input->get($name));
 				if ($rawVal !== null) {
-					$val = $this->coerceValue($rawVal, $type);
+					$val = $this->coerceValueFromSchema(
+						$rawVal,
+						$paramMeta['typeName'],
+						$paramMeta['isBuiltin'],
+						$paramMeta['allowsNull']
+					);
 				}
 			}
 
-			if ($val === null && $param->isDefaultValueAvailable()) {
-				$val = $param->getDefaultValue();
+			if ($val === null && $paramMeta['hasDefault']) {
+				$val = $paramMeta['default'];
 			}
 
 			$args[] = $val;
 		}
 
-		$result = $methodRef->invokeArgs($this, $args);
+		if ($isPost && !$isQueryAction) {
+			$this->actionMutated = true;
+		}
+
+		$result = $this->{$canonicalMethod}(...$args);
 		if (is_string($result) && $result !== '') {
 			$this->actionResponse = $result;
 		}
@@ -665,6 +874,7 @@ abstract class Component extends WireData
 	 */
 	protected function onDemoModeBlocked(string $action): void
 	{
+		$this->actionMutated = true;
 		$title = $this->_('Demo Mode');
 		$message = $this->_('State-changing actions are disabled in demo mode.');
 
@@ -700,23 +910,25 @@ abstract class Component extends WireData
 	}
 
 	/**
-	 * Uses Reflection to automatically grab public properties for state dehydration.
+	 * Uses compiled property schema + `get_object_vars()` to grab public properties for state dehydration.
 	 *
 	 * @return array<string, mixed>
 	 */
 	private function buildStateFromProperties(): array
 	{
 		$state = [];
-		$ref = self::getReflection();
+		$schema = $this->getCompiledSchema();
+		$propSchemas = $schema['properties'];
+		$initializedVars = get_object_vars($this);
 		$config = $this->wire()->config;
 		$log = $this->wire()->log;
-		foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
-			$name = $prop->getName();
-			if (!$prop->isInitialized($this)) {
+
+		foreach ($propSchemas as $name => $_meta) {
+			if (!array_key_exists($name, $initializedVars)) {
 				continue;
 			}
 
-			$val = $prop->getValue($this);
+			$val = $initializedVars[$name];
 
 			// 1. ProcessWire Object Synthesis (Dehydration)
 			if (is_object($val)) {
@@ -744,53 +956,59 @@ abstract class Component extends WireData
 	}
 
 	/**
-	 * Uses Reflection to map state variables back to public properties.
+	 * Uses compiled property schema to map state variables back to public properties.
 	 *
 	 * @param array<string, mixed> $state
 	 */
 	private function mapStateToProperties(array $state): void
 	{
-		$ref = self::getReflection();
+		$schema = $this->getCompiledSchema();
+		$propSchemas = $schema['properties'];
 		$pages = $this->wire()->pages;
+
 		foreach ($state as $k => $v) {
 			if (is_string($k) && str_starts_with($k, '__')) {
 				continue;
 			}
 
-			if ($ref->hasProperty($k)) {
-				$prop = $ref->getProperty($k);
-				if ($prop->isPublic()) {
-					// 1. ProcessWire Object Synthesis (Hydration)
-					if (is_array($v) && isset($v['__wire_model'])) {
-						if ($pages === null) {
-							continue;
-						}
-						if ($v['__wire_model'] === 'Page' && isset($v['id'])) {
-							$page = $pages->get((int) $v['id']);
-							if ($page->id) {
-								$prop->setValue($this, $page);
-							}
-							continue;
-						}
-						if ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids'])) {
-							$ids = array_map('intval', $v['ids']);
-							$foundPages = $pages->getById($ids);
-							if ($foundPages instanceof PageArray) {
-								$prop->setValue($this, clone $foundPages);
-							}
-							continue;
-						}
-					}
+			if (!isset($propSchemas[$k])) {
+				continue;
+			}
 
-					// 2. Primitive type coercion for strict_types compatibility
-					$propType = $prop->getType();
-					if (is_object($v) || ($propType instanceof ReflectionNamedType && !$propType->isBuiltin())) {
-						$prop->setValue($this, $v);
-					} else {
-						$coerced = $this->coerceValue($v, $propType);
-						$prop->setValue($this, $coerced);
-					}
+			$meta = $propSchemas[$k];
+
+			// 1. ProcessWire Object Synthesis (Hydration)
+			if (is_array($v) && isset($v['__wire_model'])) {
+				if ($pages === null) {
+					continue;
 				}
+				if ($v['__wire_model'] === 'Page' && isset($v['id'])) {
+					$page = $pages->get((int) $v['id']);
+					if ($page->id) {
+						$this->{$k} = $page;
+					}
+					continue;
+				}
+				if ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids'])) {
+					$ids = array_map('intval', $v['ids']);
+					$foundPages = $pages->getById($ids);
+					if ($foundPages instanceof PageArray) {
+						$this->{$k} = clone $foundPages;
+					}
+					continue;
+				}
+			}
+
+			// 2. Primitive type coercion for strict_types compatibility
+			if (is_object($v) || ($meta['typeName'] !== null && !$meta['isBuiltin'])) {
+				$this->{$k} = $v;
+			} else {
+				$this->{$k} = $this->coerceValueFromSchema(
+					$v,
+					$meta['typeName'],
+					$meta['isBuiltin'],
+					$meta['allowsNull']
+				);
 			}
 		}
 	}
@@ -834,10 +1052,11 @@ abstract class Component extends WireData
 
 				if (is_file($file)) {
 					$vars = ['component' => $this];
-					$ref = self::getReflection();
-					foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
-						if ($prop->isInitialized($this)) {
-							$vars[$prop->getName()] = $prop->getValue($this);
+					$schema = $this->getCompiledSchema();
+					$initializedVars = get_object_vars($this);
+					foreach ($schema['properties'] as $propName => $_meta) {
+						if (array_key_exists($propName, $initializedVars)) {
+							$vars[$propName] = $initializedVars[$propName];
 						}
 					}
 
@@ -920,6 +1139,78 @@ abstract class Component extends WireData
 	}
 
 	/**
+	 * Build the normalized state key array for opt-in component render caching.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function buildRenderCacheKeyData(): array
+	{
+		$state = $this->buildStateFromProperties();
+		if (!$this->hasExplicitId) {
+			unset($state['id']);
+		}
+
+		$langId = 0;
+		$user = $this->wire()->user;
+		if ($user && isset($user->language) && is_object($user->language) && isset($user->language->id)) {
+			$langId = (int) $user->language->id;
+		}
+
+		return [
+			'state' => $state,
+			'stateKey' => $this->stateKey,
+			'endpoint' => $this->endpointUrl,
+			'lang' => $langId,
+			'view' => is_string($this->view) ? $this->view : null,
+		];
+	}
+
+	/**
+	 * Replay cached `$config->scripts`, `$config->styles`, and `$config->js()` deltas on a render cache hit.
+	 *
+	 * @param array{scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>} $assets
+	 */
+	private function replayRenderCacheAssets(array $assets): void
+	{
+		$config = $this->wire()->config;
+		if (!$config) {
+			return;
+		}
+
+		if (!empty($assets['scripts']) && $config->scripts) {
+			foreach ($assets['scripts'] as $url) {
+				$config->scripts->add($url);
+			}
+		}
+
+		if (!empty($assets['styles']) && $config->styles) {
+			foreach ($assets['styles'] as $url) {
+				$config->styles->add($url);
+			}
+		}
+
+		if (!empty($assets['jsConfig']) && is_array($assets['jsConfig'])) {
+			foreach ($assets['jsConfig'] as $key => $val) {
+				$config->js((string) $key, $val);
+			}
+		}
+	}
+
+	/**
+	 * Replace component render cache tokens (`__HTMX_CMP_ID__` and `<!--__HTMX_STATE_PAYLOAD__-->`)
+	 * with fresh per-instance values.
+	 */
+	private function detokenizeRenderedHtml(string $tokenizedHtml, int $stateTtlHours): string
+	{
+		$html = str_replace(self::INSTANCE_ID_TOKEN, $this->id, $tokenizedHtml);
+		if (str_contains($html, self::STATE_PAYLOAD_TOKEN)) {
+			$freshState = $this->buildFreshStatePayload($stateTtlHours);
+			$html = str_replace(self::STATE_PAYLOAD_TOKEN, $freshState, $html);
+		}
+		return $html;
+	}
+
+	/**
 	 * Render the component and let exceptions bubble up.
 	 */
 	public function renderToString(): string
@@ -929,6 +1220,66 @@ abstract class Component extends WireData
 		}
 
 		$this->beforeRender();
+
+		$cache = $this->cacheRender ? $this->getHtmxCache() : null;
+		$canUseRenderCache = $cache !== null
+			&& $this->actionResponse === null
+			&& !$this->actionMutated
+			&& !$this->validationFailed
+			&& ($this->htmx === null || !isset($this->htmx->fragment) || $this->htmx->fragment->count() === 0);
+
+		if ($canUseRenderCache && $cache !== null) {
+			$cacheKeyData = $this->buildRenderCacheKeyData();
+			$cachedEntry = $cache->getComponentRender(static::class, $cacheKeyData, $this->cacheTtl);
+
+			if ($cachedEntry !== null) {
+				$this->replayRenderCacheAssets($cachedEntry['assets']);
+				$stateTtlHours = isset($cachedEntry['assets']['stateTtlHours']) && is_int($cachedEntry['assets']['stateTtlHours'])
+					? $cachedEntry['assets']['stateTtlHours']
+					: 24;
+				$html = $this->detokenizeRenderedHtml($cachedEntry['html'], $stateTtlHours);
+				$this->afterRender($html);
+				return $html;
+			}
+
+			$config = $this->wire()->config;
+			$beforeAssets = Htmx::snapshotConfigAssets($config);
+			$beforeOobCount = ($this->htmx !== null && isset($this->htmx->fragment)) ? $this->htmx->fragment->count() : 0;
+
+			$this->isCapturingRenderCache = true;
+			$this->capturedStateTtlHours = 24;
+			try {
+				$rawHtml = $this->render();
+			} finally {
+				$this->isCapturingRenderCache = false;
+			}
+
+			$afterOobCount = ($this->htmx !== null && isset($this->htmx->fragment)) ? $this->htmx->fragment->count() : 0;
+
+			if (!$this->validationFailed && $afterOobCount === $beforeOobCount) {
+				$assetDiff = Htmx::diffConfigAssets($beforeAssets, $config);
+
+				$tokenizedHtml = $rawHtml;
+				if (!$this->hasExplicitId && $this->id !== '') {
+					$tokenizedHtml = str_replace($this->id, self::INSTANCE_ID_TOKEN, $tokenizedHtml);
+				}
+
+				$cache->putComponentRender(static::class, $cacheKeyData, $tokenizedHtml, [
+					'scripts' => $assetDiff['newScripts'],
+					'styles' => $assetDiff['newStyles'],
+					'jsConfig' => $assetDiff['newJsConfig'],
+					'stateTtlHours' => $this->capturedStateTtlHours,
+				]);
+
+				$html = $this->detokenizeRenderedHtml($tokenizedHtml, $this->capturedStateTtlHours);
+			} else {
+				$html = $this->detokenizeRenderedHtml($rawHtml, $this->capturedStateTtlHours);
+			}
+
+			$this->afterRender($html);
+			return $html;
+		}
+
 		$html = $this->actionResponse ?? $this->render();
 		$this->afterRender($html);
 

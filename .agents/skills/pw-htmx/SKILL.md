@@ -1,17 +1,24 @@
 ---
 name: pw-htmx
-description: Use when working with Totoglu\Htmx Components, Ui elements, HTMX 4 swaps, <hx-partial> elements, OOB fragments, deferred triggers, or signed state payload management in the ProcessWire server-driven component model. ALWAYS activates for any Totoglu\Htmx or htmx-related code generation in this project.
+description: Use when working with Totoglu\Htmx Components, Ui elements, HtmxCache ($htmxCache), UI Shape Compilation, Zones/Slots, Value Gates, HTMX 4 swaps, <hx-partial> elements, OOB fragments, deferred triggers, or signed state payload management in the ProcessWire server-driven component model. ALWAYS activates for any Totoglu\Htmx or htmx-related code generation in this project.
 metadata:
-  version: 210
+  version: 213
   htmx-version: 4
   processwire-version: ">=3.0.271"
   php-version: ">=8.4"
   triggers:
     - htmx
     - htmx 4
+    - htmxCache
+    - HtmxCache
     - component
     - Totoglu\Htmx
     - Ui element
+    - shapeParams
+    - slotParams
+    - valueGateKeys
+    - compileTemplate
+    - resolveShape
     - out of band swap
     - hx-partial
     - hx-action
@@ -105,11 +112,28 @@ Before engaging with the UI system, strictly verify these architectural paramete
 
 ## Execution Phases
 
-### Phase 1: Stateless Ui Element Construction (`Totoglu\Htmx\Ui`)
+### Phase 1: Stateless Ui Element Construction (`Totoglu\Htmx\Ui` & `HtmxCache`)
 
-Presentation elements exclusively operate on parameters (`defaultParams`) and output HTML utilizing the AttributeBag system. **Do NOT** use public properties to track state within the class. Rely solely on typed parameter access (`$this->parameters->getString('key')`) or quick `$this->param('key')`.
+Presentation elements exclusively operate on parameters (`$shapeParams`, `$slotParams`, `$defaultParams`), component-defined `$zones`, and the `AttributeBag` system. **Do NOT** use public properties to track state within the class.
 
-Always chain the **new HTMX v4 Ui fluent helpers** on Ui instances instead of writing raw hx-\* attributes.
+#### Two-Phase Shape Compilation, Value Gate & Zone Engine
+
+`Totoglu\Htmx\Ui` includes a high-performance OPcache compilation engine (`HtmxCache` / `$htmxCache` / `$htmx->cache`):
+
+1. **Value Gate (`$valueGateKeys`, `hasValue()`, `renderIfHasValue()`):**
+   - Executed *before* computing any shape hash or touching `HtmxCache`.
+   - Atomic elements (`Title`, `Badge`, `Button`, `Image`) declare `protected array $valueGateKeys = ['text'];` (or `['label', 'icon']`, `['src']`). When empty, `renderIfHasValue()` returns `''` immediately with zero cache files written and zero empty HTML tags (`<h3></h3>`).
+   - Container elements (`Card`, `Layout`, `Overlay`, `Alert`, `Headline`) evaluate child `Ui` items via `renderIfHasValue()`. If all zones and children evaluate to `''`, the container itself short-circuits and returns `''`.
+2. **Component-Defined Zones (`$zones`, `$defaultZones`, `slot()`, `place()`):**
+   - Each `Ui` subclass declares its own valid `$zones` (flat `['left', 'center', 'right']` or grouped `['top' => ['top-left', 'top', 'top-right'], 'center' => ['left', 'center', 'right'], 'bottom' => ['bottom-left', 'bottom', 'bottom-right']]`).
+   - Call `$ui->slot('badge', Badge::make(['label' => 'NEW']))` and optionally relocate or reorder items via `$ui->place('badge', 'bottom-right')` or `$ui->place('subtitle', 'center', 'before:title')`.
+3. **Shape Parameters (`$shapeParams`) vs. Runtime Slots (`$slotParams`) & Attributes:**
+   - Only `$shapeParams`, resolved CSS classes (`renderClassAttribute()`), and `getZoneMap()` enter the compiled `Shape` hash (`site/assets/cache/Htmx/ui/{ShortClass}/`).
+   - Dynamic content (`$slotParams`) and runtime attributes (`hx-*`, `data-*`, `id`, `href`, and sub-element bags via `$ui->for('link')`) are passed at runtime into the compiled closure (`static function (array $s, array $attrs, string $children): string`), preventing cache explosion in loops.
+4. **Full-Output Memoization (`memo(true)`):**
+   - Call `->memo(true)` on repeated identical leaf elements (such as icons or status badges) to memoize the final HTML string.
+
+Always chain the **HTMX v4 Ui fluent helpers** on Ui instances instead of writing raw `hx-*` attributes.
 
 **HTMX v4 Ui helper API (full chainable matrix):**
 
@@ -148,60 +172,75 @@ use Totoglu\Htmx\Ui;
 
 class Panel extends Ui
 {
-    // 1. Declare default parametric values
-    public array $defaultParams = [
-        'title'       => 'Default Panel',
-        'type'        => 'default',        // default | primary | secondary
-        'dismissible' => false,
-        'hxEndpoint'  => null,             // Optional: if set, Panel becomes an htmx trigger
-    ];
+	public bool $isContainer = true;
+	public string $name = 'ui-panel';
 
-    public function render(): string
-    {
-        // 2. Attribute Bag Usage — negates messy inline string concatenation
-        $this->attributes->addClass('uk-panel uk-padding uk-border-rounded');
+	// 1. Structural parameters (included in compiled HtmxCache Shape hash)
+	public array $shapeParams = [
+		'type' => 'default', // default | primary | secondary
+		'dismissible' => false,
+	];
 
-        switch ($this->parameters->getString('type')) {
-            case 'primary':
-                $this->attributes->addClass('uk-background-primary uk-light');
-                break;
-            case 'secondary':
-                $this->attributes->addClass('uk-background-secondary uk-light');
-                break;
-            default:
-                $this->attributes->addClass('uk-background-muted');
-                break;
-        }
+	// 2. Dynamic content parameters (injected at runtime via $s[...], excluded from Shape hash)
+	public array $slotParams = [
+		'badge' => '',
+		'title' => '',
+		'body' => '',
+	];
 
-        // 3. Optional: if hxEndpoint param provided, attach HTMX v4 action chain
-        $endpoint = $this->parameters->get('hxEndpoint');
-        if (is_string($endpoint) && $endpoint !== '') {
-            $this->action($endpoint)                     // hx-action=...
-                 ->method('post')                         // hx-method=post
-                 ->swap('outerMorph')                     // v4 morph swap
-                 ->status(422, 'swap:outerMorph target:#panel-errors')
-                 ->disable($this->attributes->get('id') ?? 'self');
-        }
+	// 3. Component-defined zones & default placements
+	protected array $zones = [
+		'header' => ['top-left', 'top-right'],
+		'center' => ['center'],
+	];
 
-        // 4. Dynamic content assimilation
-        $closeBtn = $this->parameters->getBool('dismissible')
-            ? '<button class="uk-close" type="button" uk-close></button>'
-            : '';
+	protected array $defaultZones = [
+		'badge' => 'top-left',
+		'title' => 'center',
+		'body' => 'center',
+	];
 
-        // 5. "$this->attributes->render()" MUST formulate the fundamental root node parameters.
-        return "
-        <div {$this->attributes->render()}>
-            {$closeBtn}
-            <h3 class='uk-panel-title'>" . $this->esc($this->parameters->getString('title')) . "</h3>
-            <div class='panel-body'>
-                {$this->renderChildren()}
-            </div>
-        </div>
-        ";
-    }
+	// 4. Phase 1 (Cache Miss Only): Resolve structural classes before compiling template
+	protected function resolveShape(): array
+	{
+		$type = $this->parameters->getString('type', 'default');
+		$variantClass = match ($type) {
+			'primary' => 'uk-background-primary uk-light',
+			'secondary' => 'uk-background-secondary uk-light',
+			default => 'uk-background-muted',
+		};
+		$this->prependClass(['uk-panel', 'uk-padding', 'uk-border-rounded', $variantClass]);
+
+		return parent::resolveShape();
+	}
+
+	// 5. Phase 1 (Cache Miss Only): Return compiled PHP closure for HtmxCache
+	protected function compileTemplate(array $shape): string
+	{
+		$open = self::compileOpenTag('div', (string) $shape['classAttr']);
+		$zoneMap = $shape['zoneMap'];
+		$tlExpr = self::compileZoneItemsExpr($zoneMap['top-left'] ?? []);
+		$cExpr = self::compileZoneItemsExpr($zoneMap['center'] ?? []);
+		$closeBtn = !empty($shape['dismissible'])
+			? '<button class="uk-close" type="button" uk-close></button>'
+			: '';
+		$closeBtnExpr = var_export($closeBtn, true);
+
+		return "static function (array \$s, array \$attrs, string \$children): string {\n"
+			. "\t\$html = {$open} . {$closeBtnExpr};\n"
+			. "\t\$tl = {$tlExpr};\n"
+			. "\tif (\$tl !== '') { \$html .= '<div class=\"panel-header\">' . \$tl . '</div>'; }\n"
+			. "\t\$c = {$cExpr} . \$children;\n"
+			. "\tif (\$c !== '') { \$html .= '<div class=\"panel-body\">' . \$c . '</div>'; }\n"
+			. "\treturn \$html . '</div>';\n"
+			. "}";
+	}
 }
-// Functional reference (render anywhere in PHP):
-// echo Panel::make(['title' => 'Alert', 'type' => 'primary', 'hxEndpoint' => '/hx/req/x'])->addClass('uk-margin')->render();
+// Usage anywhere in PHP:
+// echo Panel::make(['type' => 'primary', 'dismissible' => true])
+//     ->slot('title', Title::make(['text' => 'Alert']))
+//     ->hxAction('/hx/req', 'POST')
+//     ->swap('outerMorph');
 ```
 
 ### Phase 2: State-Aware Component Deployment (`Totoglu\Htmx\Component`)
@@ -292,22 +331,16 @@ class ItemProcessor extends Component
     public int $counter = 0;
     public ?Page $item = null;   // Automatically collapsed to ID in HTML, resurrected on hydration
 
-    // 2. One-time initialization (first render only)
-    public function mount(): void
-    {
-        // Good place for initial DB reads (runs once; NOT on subsequent hydrations)
-    }
+	// 2. One-time initialization (first render only)
+	public function mount(): void
+	{
+		// Good place for initial DB reads (runs once; NOT on subsequent hydrations)
+	}
 
-    // 3. Dependency injection via fill() from renderComponent(Class::class, ['item' => $page])
-    public function fill(array $props): self
-    {
-        if (isset($props['item']) && $props['item'] instanceof Page) {
-            $this->item = $props['item'];
-        }
-        return $this;
-    }
+	// 3. Optional: `fill(array $props)` automatically assigns and coerces public properties
+	//    via the compiled Reflection schema (`getCompiledSchema()`). Only override if custom transform is needed.
 
-    // 4a. MUTATION action (POST, CSRF-checked, triggered by __htmx_action=increment)
+	// 4a. MUTATION action (POST, CSRF-checked, triggered by __htmx_action=increment)
     public function increment(): void
     {
         $this->counter++;
@@ -345,7 +378,7 @@ class ItemProcessor extends Component
         $id    = 'hxc_' . $this->id();
         $url   = $this->requestUrl();
 
-        $itemName = $this->item ? $this->esc((string)$this->item->title) : 'Void';
+        $itemName = $this->item ? htmlspecialchars((string) $this->item->title, ENT_QUOTES, 'UTF-8') : 'Void';
 
         // === CORRECT v4 form syntax: hx-action + hx-method + outerMorph + hx-status + hx-disable ===
         return "
@@ -414,6 +447,7 @@ The Htmx module registers CLI commands for `processwire-console`. Instead of wri
 
 - **Component:** `php vendor/bin/wire make:htmx:component MyComponent` (COLON separator, correct!)
 - **Ui Element:** `php vendor/bin/wire make:htmx:ui MyUiElement`
+- **Cache Clear / Stats / Prune:** `php vendor/bin/wire htmx:cache:clear [--stats] [--prune] [--days=7] [--class=MyUiElement] [--json]`
 
 **NEVER** use the legacy dash form (`make:htmx-component`) — that command name does not exist.
 

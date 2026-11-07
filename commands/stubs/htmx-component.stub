@@ -8,34 +8,47 @@ use Totoglu\Htmx\Component;
 
 class {{className}} extends Component
 {
+	/**
+	 * Public properties form the signed state contract (dehydrated into `hx__state` and rehydrated via compiled Reflection schema).
+	 * ProcessWire `Page` and `PageArray` properties are automatically collapsed to IDs and restored.
+	 */
+	public int $count = 0;
+
+	/**
+	 * Optional: set `protected bool $cacheRender = true;` (or call `$this->enableRenderCache(true, 3600)`)
+	 * to enable tokenized component render caching for identical state payloads.
+	 */
+	protected bool $cacheRender = false;
+
 	public function mount(): void
 	{
 		// One-time initialization logic (runs once on first render, not on rehydration)
 	}
 
-	public function fill(array $props): self
-	{
-		// Dependency injection logic (receives props passed via renderComponent(Class::class, $props))
-		return parent::fill($props);
-	}
-
 	/**
-	 * Example mutation action — triggered when a form submits __htmx_action=yourAction
-	 * or a button with actionTrigger('yourAction') is clicked.
+	 * Example POST mutation action — triggered when a form submits `__htmx_action=yourAction`
+	 * or a button with `actionTrigger('yourAction')` is clicked (CSRF-verified).
 	 */
 	public function yourAction(): void
 	{
-		// Mutate component state via public properties. No setState() API exists.
-		// $this->someProp = $newValue;
+		$this->count++;
 
 		// Available helpers for HTMX v4 responses:
-		// $this->htmx->response->trigger('someEvent', ['data' => 1]);
+		// $this->htmx->response->trigger('someEvent', ['count' => $this->count]);
+		// $this->htmx->response->triggerAfterSwap('someEventAfterSwap', ['count' => $this->count]);
 		// $this->htmx->response->retarget('#other-target');
 		// $this->htmx->response->reselect('#only-this');
 		// $this->htmx->response->noSwap();
-		// $this->htmx->fragment->addOobSwap('#sidebar-count', "<span id='sidebar-count'>5</span>");
 		// $this->htmx->fragment->addPartial('#toast', "<div id='toast'>Saved</div>", 'outerMorph');
 		// $this->validationError('#form-wrapper', '#form-wrapper', 422);
+	}
+
+	/**
+	 * Example GET/QUERY read-only action — methods prefixed with `query*` can be invoked via GET without CSRF.
+	 */
+	public function queryPreview(): string
+	{
+		return "<span>Count: {$this->count}</span>";
 	}
 
 	public function render(): string

@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace Totoglu\Htmx;
 
+use InvalidArgumentException;
 use ProcessWire\Htmx;
-use Totoglu\Htmx\Bag\ParameterBag;
+use ReflectionMethod;
 use Totoglu\Htmx\Bag\AttributeBag;
+use Totoglu\Htmx\Bag\ParameterBag;
+use Totoglu\Htmx\Cache\HtmxCache;
 
 use function ProcessWire\wire;
 
@@ -14,8 +17,9 @@ use function ProcessWire\wire;
  * Ui
  *
  * Base class for all stateless visual HTML elements in ProcessWire + HTMX v4.
- * Provides fluent manipulation of ParameterBag and AttributeBag plus the complete
- * HTMX v4 attribute helper suite.
+ * Provides fluent manipulation of ParameterBag and AttributeBag, the complete
+ * HTMX v4 attribute helper suite, component-specific Zone/Slot composition,
+ * Value Gate short-circuiting, and two-phase Shape Compilation via HtmxCache.
  */
 abstract class Ui
 {
@@ -36,7 +40,78 @@ abstract class Ui
 	/** @var array<string, mixed> Default parameters automatically merged into the element */
 	public array $defaultParams = [];
 
+	/**
+	 * Structural parameters that control HTML tag hierarchy, layout variants, or CSS classes.
+	 * Included in the compiled Shape key.
+	 *
+	 * @var array<string, mixed>
+	 */
+	public array $shapeParams = [];
+
+	/**
+	 * Dynamic content parameters injected at runtime into compiled templates (`$s[...]`).
+	 * Excluded from the compiled Shape key.
+	 *
+	 * @var array<string, mixed>
+	 */
+	public array $slotParams = [];
+
+	/**
+	 * Valid layout zones declared by this UI component.
+	 * May be a flat list (`['left', 'center', 'right']`) or a grouped map
+	 * (`['top' => ['top-left', 'top', 'top-right'], 'center' => ['left', 'center', 'right']]`).
+	 *
+	 * @var array<int|string, string|array<int, string>>
+	 */
+	protected array $zones = [];
+
+	/**
+	 * Default item-to-zone placement map (`['badge' => 'top-left', 'title' => 'center']`).
+	 *
+	 * @var array<string, string>
+	 */
+	protected array $defaultZones = [];
+
+	/**
+	 * Parameter or slot keys checked by the Value Gate (`hasValue()`).
+	 * When non-empty, at least one key (or `$this->children`) must carry a non-empty value
+	 * for the element to render.
+	 *
+	 * @var array<int, string>
+	 */
+	protected array $valueGateKeys = [];
+
+	protected bool $cacheable = true;
+	protected bool $memoize = false;
+	protected bool $persistMemo = false;
+	protected bool $rawContent = false;
+	protected bool $useShapeCache = false;
+
+	/** @var array<string, mixed> Explicitly assigned slot content (`slotName => Ui|string|scalar`) */
+	protected array $slotValues = [];
+
+	/** @var array<string, bool> Slot raw-HTML flags (`slotName => bool`) */
+	protected array $slotRawFlags = [];
+
+	/** @var array<string, AttributeBag> Named sub-element attribute bags (`attrFor('link')`) */
+	protected array $slotAttributes = [];
+
+	/** @var array<string, list<string>> Ordered zone-to-items map (`zone => [item1, item2]`) */
+	protected array $zonePlacements = [];
+
 	protected ?Htmx $htmx = null;
+
+	/** @var array<class-string, bool> Cached reflection check for overridden `compileTemplate()` */
+	private static array $shapeCompilerRegistry = [];
+
+	/** @var array<string, string>|null Per-render cache of resolved runtime slot strings */
+	private ?array $resolvedRuntimeSlots = null;
+
+	/** @var string|null Per-render cache of resolved children HTML */
+	private ?string $resolvedChildrenHtml = null;
+
+	/** @var array<string, bool> Tracks child UI instances already configured by parent */
+	private array $configuredChildren = [];
 
 	/**
 	 * Static factory method to instantiate a UI element fluently without the 'new' keyword.
@@ -62,11 +137,492 @@ abstract class Ui
 			? $parameters
 			: new ParameterBag($parameters);
 
-		$this->parameters->defaults($this->defaultParams);
+		$mergedDefaults = array_merge($this->defaultParams, $this->shapeParams, $this->slotParams);
+		if ($mergedDefaults !== []) {
+			$this->parameters->defaults($mergedDefaults);
+		}
+
+		foreach ($this->parameters->all() as $val) {
+			if ($val instanceof Ui) {
+				$val->parent = $this;
+			}
+		}
 
 		$this->attributes = $attributes instanceof AttributeBag
 			? $attributes
 			: new AttributeBag($attributes);
+
+		$this->initZonePlacements();
+	}
+
+	/**
+	 * Initialize the zone placement map from `$this->zones` and `$this->defaultZones`.
+	 */
+	protected function initZonePlacements(): void
+	{
+		$this->zonePlacements = [];
+		foreach ($this->getValidZones() as $zone) {
+			$this->zonePlacements[$zone] = [];
+		}
+
+		foreach ($this->defaultZones as $item => $zone) {
+			if (!isset($this->zonePlacements[$zone])) {
+				$this->zonePlacements[$zone] = [];
+			}
+			if (!in_array($item, $this->zonePlacements[$zone], true)) {
+				$this->zonePlacements[$zone][] = $item;
+			}
+		}
+	}
+
+	/**
+	 * Return all valid zone names declared by this component.
+	 *
+	 * @return list<string>
+	 */
+	public function getValidZones(): array
+	{
+		$valid = [];
+		foreach ($this->zones as $key => $value) {
+			if (is_array($value)) {
+				foreach ($value as $subZone) {
+					if (is_string($subZone) && $subZone !== '' && !in_array($subZone, $valid, true)) {
+						$valid[] = $subZone;
+					}
+				}
+			} elseif (is_string($value) && $value !== '' && !in_array($value, $valid, true)) {
+				$valid[] = $value;
+			} elseif (is_string($key) && $key !== '' && !in_array($key, $valid, true)) {
+				$valid[] = $key;
+			}
+		}
+		return $valid;
+	}
+
+	/**
+	 * Return zones normalized into groups (`groupName => list<zoneName>`).
+	 *
+	 * @return array<string, list<string>>
+	 */
+	public function getZoneGroups(): array
+	{
+		$groups = [];
+		$flat = [];
+
+		foreach ($this->zones as $key => $value) {
+			if (is_string($key) && is_array($value)) {
+				$groups[$key] = array_values(array_filter($value, static fn(mixed $z): bool => is_string($z) && $z !== ''));
+			} elseif (is_string($value) && $value !== '') {
+				$flat[] = $value;
+			}
+		}
+
+		if ($flat !== []) {
+			$groups['default'] = $flat;
+		}
+
+		return $groups;
+	}
+
+	/**
+	 * Check whether the given zone name is supported by this component.
+	 */
+	public function hasZone(string $zone): bool
+	{
+		return in_array($zone, $this->getValidZones(), true);
+	}
+
+	/**
+	 * Place a named item/slot into a target zone with optional ordering (`prepend`, `append`, `before:x`, `after:x`).
+	 *
+	 * @throws InvalidArgumentException If the target zone is not valid for this component.
+	 */
+	public function place(string $item, string $zone, ?string $order = null): static
+	{
+		$validZones = $this->getValidZones();
+		if ($validZones !== [] && !in_array($zone, $validZones, true)) {
+			throw new InvalidArgumentException(sprintf(
+				'Invalid zone "%s" for UI component "%s". Valid zones: %s',
+				$zone,
+				static::class,
+				implode(', ', $validZones)
+			));
+		}
+
+		// Remove item from any previous zone placement
+		foreach ($this->zonePlacements as $z => $items) {
+			$idx = array_search($item, $items, true);
+			if ($idx !== false) {
+				unset($this->zonePlacements[$z][$idx]);
+				$this->zonePlacements[$z] = array_values($this->zonePlacements[$z]);
+			}
+		}
+
+		if (!isset($this->zonePlacements[$zone])) {
+			$this->zonePlacements[$zone] = [];
+		}
+
+		$list = $this->zonePlacements[$zone];
+
+		if ($order === 'prepend') {
+			array_unshift($list, $item);
+		} elseif ($order !== null && str_starts_with($order, 'before:')) {
+			$target = substr($order, 7);
+			$pos = array_search($target, $list, true);
+			if ($pos !== false) {
+				array_splice($list, (int) $pos, 0, [$item]);
+			} else {
+				$list[] = $item;
+			}
+		} elseif ($order !== null && str_starts_with($order, 'after:')) {
+			$target = substr($order, 6);
+			$pos = array_search($target, $list, true);
+			if ($pos !== false) {
+				array_splice($list, (int) $pos + 1, 0, [$item]);
+			} else {
+				$list[] = $item;
+			}
+		} else {
+			$list[] = $item;
+		}
+
+		$this->zonePlacements[$zone] = array_values($list);
+		$this->invalidateRuntimeCache();
+
+		return $this;
+	}
+
+	/**
+	 * Return the active ordered map of `zoneName => list<itemKey>`.
+	 *
+	 * @return array<string, list<string>>
+	 */
+	public function getZoneMap(): array
+	{
+		return $this->zonePlacements;
+	}
+
+	/**
+	 * Assign content (`Ui`, string, scalar, or array of `Ui`/strings) to a named slot,
+	 * optionally placing it into a specific zone.
+	 */
+	public function slot(string $name, mixed $content, ?string $zone = null, bool $raw = false): static
+	{
+		if ($content instanceof Ui) {
+			$content->parent = $this;
+		} elseif (is_array($content)) {
+			foreach ($content as $item) {
+				if ($item instanceof Ui) {
+					$item->parent = $this;
+				}
+			}
+		}
+
+		$this->slotValues[$name] = $content;
+		$this->slotRawFlags[$name] = $raw;
+
+		if ($zone !== null) {
+			$this->place($name, $zone);
+		} elseif ($this->hasZone($name) && !$this->isItemPlaced($name)) {
+			$this->place($name, $name);
+		}
+
+		$this->invalidateRuntimeCache();
+
+		return $this;
+	}
+
+	/**
+	 * Check whether an item key is already placed in any zone.
+	 */
+	protected function isItemPlaced(string $item): bool
+	{
+		foreach ($this->zonePlacements as $items) {
+			if (in_array($item, $items, true)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Mark slot content as trusted raw HTML (disables automatic entity escaping for scalar slot content).
+	 */
+	public function raw(bool $raw = true): static
+	{
+		$this->rawContent = $raw;
+		$this->invalidateRuntimeCache();
+		return $this;
+	}
+
+	/**
+	 * Enable or disable shape/render caching for this element instance.
+	 */
+	public function cache(bool $enable = true): static
+	{
+		$this->cacheable = $enable;
+		return $this;
+	}
+
+	/**
+	 * Enable full HTML output memoization for identical leaf UI elements (such as icons or badges).
+	 */
+	public function memo(bool $enable = true, bool $persist = false): static
+	{
+		$this->memoize = $enable;
+		$this->persistMemo = $persist;
+		return $this;
+	}
+
+	/**
+	 * Retrieve or create a named AttributeBag for a sub-element (e.g., `attrFor('link')`, `attrFor('icon')`).
+	 */
+	public function attrFor(string $slot): AttributeBag
+	{
+		if ($slot === 'root' || $slot === '') {
+			return $this->attributes;
+		}
+		if (!isset($this->slotAttributes[$slot])) {
+			$this->slotAttributes[$slot] = new AttributeBag();
+		}
+		return $this->slotAttributes[$slot];
+	}
+
+	/**
+	 * Fluent alias for `attrFor()`.
+	 */
+	public function for(string $slot): AttributeBag
+	{
+		return $this->attrFor($slot);
+	}
+
+	/**
+	 * Hook allowing a Container UI to configure a child UI (e.g. adding contextual CSS classes)
+	 * before the child checks `hasValue()` or computes its own Shape hash.
+	 */
+	protected function configureChildUi(string $item, Ui $child): void {}
+
+	/**
+	 * Ensure `configureChildUi()` runs at most once per child instance during a render cycle.
+	 */
+	private function ensureChildConfigured(string $item, Ui $child): void
+	{
+		$hash = $item . ':' . spl_object_id($child);
+		if (isset($this->configuredChildren[$hash])) {
+			return;
+		}
+		$this->configuredChildren[$hash] = true;
+		$child->parent = $this;
+		if ($this->component !== null && $child->component === null) {
+			$child->component = $this->component;
+		}
+		$this->configureChildUi($item, $child);
+	}
+
+	/**
+	 * Value Gate: Determine whether this element has meaningful content to render.
+	 * Executed BEFORE computing any Shape key or touching `HtmxCache`.
+	 */
+	public function hasValue(): bool
+	{
+		if ($this->valueGateKeys !== []) {
+			foreach ($this->valueGateKeys as $key) {
+				$val = $this->getRawSlotOrParamValue($key);
+				if ($this->isMeaningfulValue($key, $val)) {
+					return true;
+				}
+			}
+			foreach ($this->children as $idx => $child) {
+				if ($this->isMeaningfulValue('child_' . $idx, $child)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		if ($this->zones !== []) {
+			$slots = $this->getResolvedRuntimeSlots();
+			foreach ($this->zonePlacements as $items) {
+				foreach ($items as $itemKey) {
+					if (($slots[$itemKey] ?? '') !== '') {
+						return true;
+					}
+				}
+			}
+			foreach ($slots as $val) {
+				if ($val !== '') {
+					return true;
+				}
+			}
+			if ($this->getResolvedChildrenHtml() !== '') {
+				return true;
+			}
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Render this UI element only if `renderReady()` and `hasValue()` are true;
+	 * otherwise return `''` immediately without touching `HtmxCache`.
+	 */
+	public function renderIfHasValue(): string
+	{
+		return (string) $this;
+	}
+
+	/**
+	 * Check whether a raw slot/parameter/child value is non-empty.
+	 */
+	protected function isMeaningfulValue(string $key, mixed $val): bool
+	{
+		if ($val === null || $val === false) {
+			return false;
+		}
+		if ($val instanceof Ui) {
+			$this->ensureChildConfigured($key, $val);
+			return $val->renderReady() && $val->hasValue();
+		}
+		if (is_array($val)) {
+			foreach ($val as $subIdx => $item) {
+				if ($this->isMeaningfulValue($key . '_' . $subIdx, $item)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		if (is_bool($val)) {
+			return $val;
+		}
+		return trim((string) $val) !== '';
+	}
+
+	/**
+	 * Retrieve a raw value from `$this->slotValues` or `$this->parameters`.
+	 */
+	protected function getRawSlotOrParamValue(string $key): mixed
+	{
+		if (array_key_exists($key, $this->slotValues)) {
+			return $this->slotValues[$key];
+		}
+		if ($this->parameters->has($key)) {
+			return $this->parameters->get($key);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolve all runtime slot values into safe HTML strings once per render cycle.
+	 * Child `Ui` instances are evaluated via `renderIfHasValue()` so each child uses its own shape cache.
+	 *
+	 * @return array<string, string>
+	 */
+	protected function getResolvedRuntimeSlots(): array
+	{
+		if ($this->resolvedRuntimeSlots !== null) {
+			return $this->resolvedRuntimeSlots;
+		}
+
+		$keys = array_unique(array_merge(
+			array_keys($this->slotParams),
+			array_keys($this->slotValues),
+			array_keys($this->defaultZones)
+		));
+
+		foreach ($this->zonePlacements as $items) {
+			foreach ($items as $itemKey) {
+				if (!in_array($itemKey, $keys, true)) {
+					$keys[] = $itemKey;
+				}
+			}
+		}
+
+		// Include any additional non-shape parameters passed into ParameterBag
+		foreach ($this->parameters->all() as $paramKey => $paramVal) {
+			if (!array_key_exists($paramKey, $this->shapeParams) && !in_array($paramKey, $keys, true)) {
+				$keys[] = $paramKey;
+			}
+		}
+
+		$resolved = [];
+		foreach ($keys as $key) {
+			$rawVal = $this->getRawSlotOrParamValue($key);
+			$isRaw = $this->slotRawFlags[$key] ?? $this->rawContent;
+			$resolved[$key] = $this->resolveSingleSlotValue($key, $rawVal, $isRaw);
+		}
+
+		$this->resolvedRuntimeSlots = $resolved;
+		return $resolved;
+	}
+
+	/**
+	 * Convert a single slot/parameter value (`Ui`, array, or scalar) into a rendered HTML string.
+	 */
+	protected function resolveSingleSlotValue(string $key, mixed $value, bool $isRaw): string
+	{
+		if ($value === null || $value === false) {
+			return '';
+		}
+
+		if ($value instanceof Ui) {
+			$this->ensureChildConfigured($key, $value);
+			return $value->renderIfHasValue();
+		}
+
+		if (is_array($value)) {
+			$parts = [];
+			foreach ($value as $idx => $item) {
+				$rendered = $this->resolveSingleSlotValue($key . '_' . $idx, $item, $isRaw);
+				if ($rendered !== '') {
+					$parts[] = $rendered;
+				}
+			}
+			return implode('', $parts);
+		}
+
+		$str = (string) $value;
+		if (trim($str) === '') {
+			return '';
+		}
+
+		return $isRaw ? $str : $this->esc($str);
+	}
+
+	/**
+	 * Resolve `$this->children` into an HTML string once per render cycle.
+	 */
+	protected function getResolvedChildrenHtml(): string
+	{
+		if ($this->resolvedChildrenHtml !== null) {
+			return $this->resolvedChildrenHtml;
+		}
+
+		$html = '';
+		foreach ($this->children as $idx => $child) {
+			if ($child instanceof Ui) {
+				$this->ensureChildConfigured('child_' . $idx, $child);
+				$html .= $child->renderIfHasValue();
+			} else {
+				$str = (string) $child;
+				if ($str !== '') {
+					$html .= $str;
+				}
+			}
+		}
+
+		$this->resolvedChildrenHtml = $html;
+		return $html;
+	}
+
+	/**
+	 * Reset per-render cached slot/children strings when state mutates.
+	 */
+	protected function invalidateRuntimeCache(): void
+	{
+		$this->resolvedRuntimeSlots = null;
+		$this->resolvedChildrenHtml = null;
+		$this->configuredChildren = [];
 	}
 
 	public function getId(): string
@@ -84,8 +640,7 @@ abstract class Ui
 			return $this->parameters->get($key);
 		}
 
-		$this->parameters->set($key, $value);
-		return $this;
+		return $this->setParam($key, $value);
 	}
 
 	protected function esc(mixed $value): string
@@ -95,7 +650,11 @@ abstract class Ui
 
 	public function setParam(string $key, mixed $value): self
 	{
+		if ($value instanceof Ui) {
+			$value->parent = $this;
+		}
 		$this->parameters->set($key, $value);
+		$this->invalidateRuntimeCache();
 		return $this;
 	}
 
@@ -121,6 +680,15 @@ abstract class Ui
 	public function addClass(string|array $class): self
 	{
 		$this->attributes->addClass($class);
+		return $this;
+	}
+
+	/**
+	 * @param string|array<int, string> $class
+	 */
+	public function prependClass(string|array $class): self
+	{
+		$this->attributes->prependClass($class);
 		return $this;
 	}
 
@@ -485,7 +1053,193 @@ abstract class Ui
 		return $text;
 	}
 
-	abstract public function render(): string;
+	/**
+	 * Determine whether this UI subclass uses two-phase Shape Compilation (`compileTemplate()`).
+	 */
+	protected function usesShapeCache(): bool
+	{
+		if ($this->useShapeCache) {
+			return true;
+		}
+		$class = static::class;
+		if (!isset(self::$shapeCompilerRegistry[$class])) {
+			$ref = new ReflectionMethod($class, 'compileTemplate');
+			self::$shapeCompilerRegistry[$class] = ($ref->getDeclaringClass()->getName() !== self::class);
+		}
+		return self::$shapeCompilerRegistry[$class];
+	}
+
+	/**
+	 * Build the deterministic array of structural values that uniquely identify this element's HTML shape.
+	 * Dynamic slot values (`$slotParams`) and runtime attributes (`hx-*`, `data-*`, `id`, `href`) are excluded.
+	 *
+	 * @return array<string, mixed>
+	 */
+	protected function buildShapeKeyValues(): array
+	{
+		$shapeValues = [];
+		foreach ($this->shapeParams as $key => $defaultVal) {
+			$val = $this->parameters->get($key, $defaultVal);
+			if (is_scalar($val) || is_array($val) || $val === null) {
+				$shapeValues[$key] = $val;
+			}
+		}
+
+		$shapeValues['__classes'] = $this->attributes->getClassesKey();
+
+		if ($this->slotAttributes !== []) {
+			$slotClassKeys = [];
+			foreach ($this->slotAttributes as $slotName => $bag) {
+				$ck = $bag->getClassesKey();
+				if ($ck !== '') {
+					$slotClassKeys[$slotName] = $ck;
+				}
+			}
+			if ($slotClassKeys !== []) {
+				ksort($slotClassKeys);
+				$shapeValues['__slot_classes'] = $slotClassKeys;
+			}
+		}
+
+		if ($this->zonePlacements !== []) {
+			$shapeValues['__zones'] = $this->zonePlacements;
+		}
+
+		return $shapeValues;
+	}
+
+	/**
+	 * Phase 1 (Cache Miss Only): Resolve structural parameters, CSS classes, and zone maps
+	 * needed by `compileTemplate(array $shape)`.
+	 *
+	 * @return array<string, mixed>
+	 */
+	protected function resolveShape(): array
+	{
+		$shape = [];
+		foreach ($this->shapeParams as $key => $defaultVal) {
+			$shape[$key] = $this->parameters->get($key, $defaultVal);
+		}
+		$shape['classAttr'] = $this->attributes->renderClassAttribute();
+		$shape['zoneMap'] = $this->getZoneMap();
+		$shape['zoneGroups'] = $this->getZoneGroups();
+
+		$slotClassAttrs = [];
+		foreach ($this->slotAttributes as $slotName => $bag) {
+			$slotClassAttrs[$slotName] = $bag->renderClassAttribute();
+		}
+		$shape['slotClassAttrs'] = $slotClassAttrs;
+
+		return $shape;
+	}
+
+	/**
+	 * Phase 1 (Cache Miss Only): Return a PHP closure source string:
+	 * `static function (array $s, array $attrs, string $children): string { ... }`
+	 *
+	 * @param array<string, mixed> $shape
+	 */
+	protected function compileTemplate(array $shape): string
+	{
+		$open = self::compileOpenTag('div', (string) ($shape['classAttr'] ?? ''));
+		return "static function (array \$s, array \$attrs, string \$children): string {\n"
+			. "\treturn {$open} . \$children . '</div>';\n"
+			. "}";
+	}
+
+	/**
+	 * Helper for `compileTemplate()`: generate PHP expression for an opening HTML tag with baked class attribute
+	 * and runtime attributes from `$attrs[$attrSlot]`.
+	 */
+	protected static function compileOpenTag(string $tag, string $classAttr, string $attrSlot = 'root'): string
+	{
+		$prefix = '<' . $tag . $classAttr;
+		return var_export($prefix, true) . ' . ($attrs[' . var_export($attrSlot, true) . '] ?? \'\') . \'>\'';
+	}
+
+	/**
+	 * Helper for `compileTemplate()`: generate PHP expression that concatenates a list of slot keys from `$s`.
+	 *
+	 * @param list<string> $items
+	 */
+	protected static function compileZoneItemsExpr(array $items): string
+	{
+		if ($items === []) {
+			return "''";
+		}
+		$parts = [];
+		foreach ($items as $item) {
+			$parts[] = '($s[' . var_export($item, true) . '] ?? \'\')';
+		}
+		return implode(' . ', $parts);
+	}
+
+	/**
+	 * Build runtime attribute strings (`hx-*`, `data-*`, `id`, `href`, etc.) for root and named sub-elements.
+	 *
+	 * @return array<string, string>
+	 */
+	protected function buildRuntimeAttributesMap(): array
+	{
+		$map = [
+			'root' => $this->attributes->renderRuntimeAttributes(true),
+		];
+		foreach ($this->slotAttributes as $slotName => $bag) {
+			$map[$slotName] = $bag->renderRuntimeAttributes(true);
+		}
+		return $map;
+	}
+
+	/**
+	 * Resolve the active `HtmxCache` instance.
+	 */
+	protected function getHtmxCache(): ?HtmxCache
+	{
+		return HtmxCache::resolve($this->htmx);
+	}
+
+	/**
+	 * Execute the two-phase compiled Shape closure via `HtmxCache`.
+	 */
+	protected function renderCompiledShape(): string
+	{
+		$slots = $this->getResolvedRuntimeSlots();
+		$childrenHtml = $this->getResolvedChildrenHtml();
+		$runtimeAttrs = $this->buildRuntimeAttributesMap();
+
+		$cache = $this->cacheable ? $this->getHtmxCache() : null;
+		if ($cache === null) {
+			$shape = $this->resolveShape();
+			$code = $this->compileTemplate($shape);
+			/** @var callable $closure */
+			$closure = eval('return ' . $code . ';');
+			return (string) $closure($slots, $runtimeAttrs, $childrenHtml);
+		}
+
+		$shapeKeyValues = $this->buildShapeKeyValues();
+		$closure = $cache->getOrCompileUi(
+			static::class,
+			$shapeKeyValues,
+			function (): string {
+				$shape = $this->resolveShape();
+				return $this->compileTemplate($shape);
+			}
+		);
+
+		return (string) $closure($slots, $runtimeAttrs, $childrenHtml);
+	}
+
+	/**
+	 * Render this UI element. Subclasses may either override `render()` directly
+	 * or override `compileTemplate(array $shape)` for two-phase Shape Compilation.
+	 */
+	public function render(): string
+	{
+		if ($this->usesShapeCache()) {
+			return $this->renderCompiledShape();
+		}
+		return $this->getResolvedChildrenHtml();
+	}
 
 	protected function beforeRender(): void {}
 
@@ -497,6 +1251,7 @@ abstract class Ui
 			$child->parent = $this;
 		}
 		$this->children[] = $child;
+		$this->invalidateRuntimeCache();
 		return $this;
 	}
 
@@ -552,11 +1307,7 @@ abstract class Ui
 
 	public function renderChildren(): string
 	{
-		$html = '';
-		foreach ($this->children as $child) {
-			$html .= (string) $child;
-		}
-		return $html;
+		return $this->getResolvedChildrenHtml();
 	}
 
 	public function getParent(): ?Ui
@@ -598,17 +1349,56 @@ abstract class Ui
 		return true;
 	}
 
-	public function __toString(): string
+	/**
+	 * Execute the full render lifecycle (Value Gate -> beforeRender -> Memo/Shape Cache/render -> afterRender)
+	 * and let exceptions bubble up.
+	 */
+	public function renderToString(): string
 	{
 		try {
-			if (!$this->renderReady()) {
+			if (!$this->renderReady() || !$this->hasValue()) {
 				return '';
 			}
 
 			$this->beforeRender();
-			$html = $this->render();
+
+			$cache = ($this->cacheable && $this->memoize) ? $this->getHtmxCache() : null;
+			$memoKey = null;
+
+			if ($cache !== null) {
+				$memoPayload = [
+					'shape' => $this->buildShapeKeyValues(),
+					'slots' => $this->getResolvedRuntimeSlots(),
+					'attrs' => $this->buildRuntimeAttributesMap(),
+					'children' => $this->getResolvedChildrenHtml(),
+				];
+				$memoKey = hash('xxh128', (string) json_encode($memoPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+				$cachedMemo = $cache->getMemo(static::class, $memoKey);
+				if ($cachedMemo !== null) {
+					return $cachedMemo;
+				}
+			}
+
+			$html = $this->usesShapeCache()
+				? $this->renderCompiledShape()
+				: $this->render();
+
 			$this->afterRender($html);
+
+			if ($cache !== null && $memoKey !== null) {
+				$cache->putMemo(static::class, $memoKey, $html, $this->persistMemo);
+			}
+
 			return $html;
+		} finally {
+			$this->invalidateRuntimeCache();
+		}
+	}
+
+	public function __toString(): string
+	{
+		try {
+			return $this->renderToString();
 		} catch (\Throwable $e) {
 			$config = wire()->config;
 			if ($config !== null && $config->debug) {

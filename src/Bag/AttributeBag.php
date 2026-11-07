@@ -113,6 +113,23 @@ class AttributeBag extends ParameterBag
 	}
 
 	/**
+	 * Prepend one or more CSS classes to the beginning of the class list.
+	 *
+	 * @param string|array<int, string> $class
+	 */
+	public function prependClass(string|array $class): self
+	{
+		$existing = $this->getClasses();
+		$incoming = is_array($class) ? $class : explode(' ', $class);
+		$incoming = array_values(array_filter(array_map('trim', $incoming)));
+
+		$merged = array_values(array_unique(array_merge($incoming, $existing)));
+		$this->set('class', implode(' ', $merged));
+
+		return $this;
+	}
+
+	/**
 	 * Override set to support automated JSON conversion, returning self for fluid interface.
 	 */
 	public function set(string $key, mixed $value, bool $asJson = false): self
@@ -133,6 +150,57 @@ class AttributeBag extends ParameterBag
 	}
 
 	/**
+	 * Set a `data-*` attribute on this bag.
+	 */
+	public function data(string $key, mixed $value, bool $asJson = false): self
+	{
+		return $this->set("data-{$key}", $value, $asJson);
+	}
+
+	/**
+	 * Set an `hx-*` attribute on this bag.
+	 */
+	public function hx(string $key, mixed $value, bool $asJson = false): self
+	{
+		return $this->set("hx-{$key}", $value, $asJson);
+	}
+
+	/**
+	 * Set `hx-action` and `hx-method` on this bag.
+	 */
+	public function hxAction(string $url, string $httpMethod = 'GET'): self
+	{
+		return $this->set('hx-action', $url)
+			->set('hx-method', strtoupper(trim($httpMethod)));
+	}
+
+	public function hxTarget(string $selector): self
+	{
+		return $this->set('hx-target', $selector);
+	}
+
+	public function hxSwap(string $style): self
+	{
+		return $this->set('hx-swap', $style);
+	}
+
+	public function hxInclude(string $selector): self
+	{
+		return $this->set('hx-include', $selector);
+	}
+
+	/**
+	 * @param string|array<string, mixed> $values
+	 */
+	public function hxVals(string|array $values): self
+	{
+		if (is_array($values)) {
+			return $this->set('hx-vals', $values, true);
+		}
+		return $this->set('hx-vals', $values);
+	}
+
+	/**
 	 * Get the current classes as an array.
 	 *
 	 * @return array<int, string>
@@ -141,6 +209,46 @@ class AttributeBag extends ParameterBag
 	{
 		$classString = $this->getString('class');
 		return array_values(array_filter(explode(' ', trim($classString))));
+	}
+
+	/**
+	 * Get the normalized space-separated class string used for shape hashing.
+	 */
+	public function getClassesKey(): string
+	{
+		return implode(' ', $this->getClasses());
+	}
+
+	/**
+	 * Render only the `class="..."` attribute (or empty string when no classes are set).
+	 *
+	 * When `$leadingSpace` is true and at least one class is present,
+	 * the returned string is prefixed with a single space for direct tag interpolation.
+	 */
+	public function renderClassAttribute(bool $leadingSpace = true): string
+	{
+		$classes = $this->getClassesKey();
+		if ($classes === '') {
+			return '';
+		}
+
+		return ($leadingSpace ? ' ' : '') . sprintf('class="%s"', htmlspecialchars($classes, ENT_QUOTES, 'UTF-8', false));
+	}
+
+	/**
+	 * Render all attributes except `class` (such as `id`, `hx-*`, `data-*`, `href`, `aria-*`).
+	 *
+	 * When `$leadingSpace` is true and at least one non-class attribute is present,
+	 * the returned string is prefixed with a single space for direct tag interpolation.
+	 */
+	public function renderRuntimeAttributes(bool $leadingSpace = true): string
+	{
+		$html = $this->formatAttributePairs(true);
+		if ($html === []) {
+			return '';
+		}
+
+		return ($leadingSpace ? ' ' : '') . implode(' ', $html);
 	}
 
 	/**
@@ -156,8 +264,21 @@ class AttributeBag extends ParameterBag
 	 */
 	public function render(): string
 	{
+		return implode(' ', $this->formatAttributePairs(false));
+	}
+
+	/**
+	 * Format attribute key-value pairs as escaped HTML strings.
+	 *
+	 * @return list<string>
+	 */
+	private function formatAttributePairs(bool $excludeClass = false): array
+	{
 		$html = [];
 		foreach ($this->all() as $key => $value) {
+			if ($excludeClass && (string) $key === 'class') {
+				continue;
+			}
 			if ($value === true) {
 				$html[] = htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8', false);
 			} elseif ($value !== null && $value !== false) {
@@ -168,7 +289,6 @@ class AttributeBag extends ParameterBag
 				);
 			}
 		}
-
-		return implode(' ', $html);
+		return $html;
 	}
 }

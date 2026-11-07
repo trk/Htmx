@@ -167,17 +167,15 @@ This means you can place your component class files directly in `site/components
 
 ### Module-Level Discovery & Explicit Registration API
 
-The HTMX module automatically discovers components bundled inside **other ProcessWire modules** — and also provides an explicit registration API (`registerModulePaths()`, `registerComponentPath()`, `registerUiPath()`) for modules that register paths programmatically.
+The HTMX module automatically discovers components and UI elements bundled inside **other installed ProcessWire modules**:
 
-**How it works:**
+1. When the `Htmx` module initializes, `Htmx::discoverModuleComponents()` scans all installed modules in `site/modules/`, resolving the real directory even when the module folder name differs from the module class name.
+2. For each installed module that contains a `components/` and/or `ui/` directory, it automatically registers those directories under the `Htmx\Component` and `Htmx\Ui` namespaces.
+3. Modules can also register explicit component aliases at runtime via `$htmx->registerComponent('alias', MyComponent::class)`.
 
-1. When the Htmx module initializes, it scans all installed modules that declare `'requires' => ['Htmx']` in their module info, resolving the real directory even when the module folder name differs from the module class name.
-2. For each qualifying module, it checks for `components/` and/or `ui/` directories in the module root and registers them via `registerModulePaths()`.
-3. Modules can also register their `components/` and `ui/` directories and component aliases explicitly at boot via `$htmx->registerModulePaths(__DIR__, ['MyComponent' => 'Htmx\\Component\\MyComponent'])`.
+**Result:** During HTMX AJAX requests to `/hx/req`, the endpoint can resolve and instantiate component classes from any installed module automatically.
 
-**Result:** During HTMX AJAX requests to `/hx/req`, the endpoint can resolve and instantiate component classes from any Htmx-dependent module — even if that module is not autoloaded.
-
-The discovery results are cached in `WireCache` for performance. The cache is automatically invalidated when modules are refreshed via the admin UI.
+The discovery results are cached in `WireCache` (`htmx.module-components`) for performance and automatically invalidated when modules are refreshed.
 
 By default, the module securely sandboxes all component rendering strictly within these explicitly defined directories and the native `templates/` folder. This is configurable via the **Allow Component Paths** module setting, balancing optimal Developer Experience (DX) with security.
 
@@ -490,9 +488,28 @@ With **Auto Target Extraction** enabled, if the browser requests a specific `#ta
 
 ---
 
-## 🛠️ CLI Scaffolding Commands
+## ⚡ HtmxCache (`$htmxCache`) — Two-Phase Shape Compilation, Zones & Value Gate
 
-The module includes integration with `processwire-console` to easily generate boilerplate code for your Components and Ui elements.
+The module includes an independent, OPcache-backed compilation engine (`Totoglu\Htmx\Cache\HtmxCache`, accessible via `wire('htmxCache')` or `$htmx->cache`) that stores compiled PHP closures and schemas under `site/assets/cache/Htmx/`.
+
+### 1. Value Gate (`$valueGateKeys`, `hasValue()`, `renderIfHasValue()`)
+- Atomic UI elements (`Title`, `Badge`, `Button`, `Image`) declare `protected array $valueGateKeys = ['text'];`. When empty, `renderIfHasValue()` returns `''` immediately—writing **zero cache files** and outputting **zero empty HTML wrapper tags**.
+- Container UI elements (`Card`, `Layout`, `Overlay`, `Alert`, `Headline`) evaluate child `Ui` items via `renderIfHasValue()`. If all zones and children evaluate to `''`, the entire container short-circuits to `''`.
+
+### 2. Component-Defined Zones (`$zones`, `$defaultZones`, `slot()`, `place()`, `for()`)
+- Each `Ui` subclass defines its own valid `$zones` (flat `['left', 'center', 'right']` or grouped `['top' => ['top-left', 'top', 'top-right'], 'center' => ['left', 'center', 'right'], 'bottom' => ['bottom-left', 'bottom', 'bottom-right']]`).
+- Assign slots via `$card->slot('badge', Badge::make(['label' => 'NEW']))` and dynamically relocate or reorder items via `$card->place('badge', 'bottom-right')` or `$card->place('subtitle', 'center', 'before:title')`.
+- Target sub-element attributes without exploding shape cache files via `$card->for('link')->set('href', '/item/1')->hxAction('/item/1', 'GET')`.
+
+### 3. Two-Phase Shape Compilation & Component Caching
+- **UI Shape Cache:** `resolveShape()` and `compileTemplate(array $shape)` run only on a cache miss, compiling a reusable PHP closure (`static function (array $s, array $attrs, string $children): string`) to disk. Rendering 50 cards with different titles, badges, and `hx-vals` compiles only **1 shape file** per unique structural layout.
+- **Component Reflection Schema & Opt-in Render Cache:** `Totoglu\Htmx\Component` compiles its public property and action parameter Reflection schema once per class (`getCompiledSchema()`) and supports opt-in tokenized render caching via `$this->enableRenderCache(true, 3600)` (preserving unique `$this->id`, fresh CSRF + HMAC `hx__state` inputs, and `$config->scripts`/`styles`/`js()` deltas on every cache hit).
+
+---
+
+## 🛠️ CLI Scaffolding & Cache Commands
+
+The module integrates with `processwire-console` (`vendor/bin/wire`):
 
 **Generate a Stateful Component:**
 
@@ -500,36 +517,30 @@ The module includes integration with `processwire-console` to easily generate bo
 php vendor/bin/wire make:htmx:component Auth/LoginModal
 ```
 
-_(By default, this generates `site/components/Auth/LoginModal.php` based on your module settings)_
-
-**Generate a Stateless Ui Element:**
+**Generate a Stateless Ui Element (with Shape Compilation, Zones & Value Gate):**
 
 ```bash
 php vendor/bin/wire make:htmx:ui Card/Header
 ```
 
-_(Generates `site/ui/Card/Header.php`)_
-
-You can also override the destination directory on the fly using the `--dir` option (useful for packing components inside independent modules):
+**Inspect, Prune, or Clear `HtmxCache`:**
 
 ```bash
-php vendor/bin/wire make:htmx:ui Card/Header --dir=site/modules/MyCustomModule/ui
+php vendor/bin/wire htmx:cache:clear --stats
+php vendor/bin/wire htmx:cache:clear --prune --days=7
+php vendor/bin/wire htmx:cache:clear --class=Card
+php vendor/bin/wire htmx:cache:clear --json
 ```
 
 ---
 
 ## 🧪 Testing and Verification
 
-The module ships with an automated architectural checking script alongside sample components (`Counter`, `Form`, `UiObject`, etc.) required for ensuring compatibility across environments. These are kept in an isolated `tests/` directory.
+Run the automated Pest unit and architecture test suite (`HtmxCacheTest`, `HtmxV4Test`, and `LayeringTest`) via `vendor/bin/wire`:
 
-To test the module functionality:
-
-1. Copy the `components/` and `ui/` directories from `site/modules/Htmx/tests/` into your standard `site/` folder.
-2. Open `site/modules/Htmx/tests/run.php` and copy its contents.
-3. Paste the logic directly into one of your ProcessWire frontend template files (like `basic-page.php` or `home.php`).
-4. If you want to explicitly test component bindings to specific pages, you can set the `$pageId` variable inside the script.
-
-These isolated checks help detect side-effects if you build structural configurations and dynamic ProcessWire template deployments that rely on `Htmx`.
+```bash
+php vendor/bin/wire test site/modules/Htmx/tests/Unit
+```
 
 ---
 

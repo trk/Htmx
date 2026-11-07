@@ -23,7 +23,17 @@
   ],
   "autoload": {
     "psr-4": {
-      "Totoglu\\Htmx\\": "src/"
+      "Totoglu\\Htmx\\": "src/",
+      "Totoglu\\Htmx\\Commands\\": "commands/"
+    }
+  },
+  "extra": {
+    "processwire-console": {
+      "commands": [
+        "Totoglu\\Htmx\\Commands\\HtmxCacheClearCommand",
+        "Totoglu\\Htmx\\Commands\\MakeHtmxComponentCommand",
+        "Totoglu\\Htmx\\Commands\\MakeHtmxUiCommand"
+      ]
     }
   },
   "require": {

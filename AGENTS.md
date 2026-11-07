@@ -65,7 +65,9 @@ Translate the HTMX 4 references above into these module-specific implementation 
 
 - **Stateful Components:** MUST reside in `site/components/`, use `namespace Htmx\Component;`, and `extend Totoglu\Htmx\Component`.
 - **Stateless UI Elements:** MUST reside in `site/ui/`, use `namespace Htmx\Ui;`, and `extend Totoglu\Htmx\Ui`.
-- **Module-Bundled Components:** Modules that declare `'requires' => ['Htmx']` and have `components/` and/or `ui/` directories are auto-discovered (even when the module folder name differs from the module class name), or can register paths and component aliases explicitly via `$htmx->registerModulePaths(__DIR__, [...])`, `$htmx->registerComponentPath($dir)`, and `$htmx->registerUiPath($dir)`.
+- **Module-Bundled Components:** Modules that have `components/` and/or `ui/` directories are auto-discovered at boot via `Htmx::discoverModuleComponents()`, or can register explicit component aliases via `$htmx->registerComponent('alias', MyComponent::class)`.
+- **Two-Tier Compilation & Caching (`HtmxCache` / `$htmxCache`):** `Totoglu\Htmx\Ui` compiles structural shapes (`$shapeParams`, zones, sub-element attribute bags) once into OPcache-backed closures via `$htmx->cache` (`wire('htmxCache')`) and supports full-output memoization via `$ui->memo()`. `Totoglu\Htmx\Component` compiles its property/action Reflection schema once per class and supports opt-in tokenized render caching (`$this->enableRenderCache()`).
+- **UI Value Gate & Zones:** `Totoglu\Htmx\Ui` elements support `$valueGateKeys` (`hasValue()` / `renderIfHasValue()`) and component-defined `$zones` / `$defaultZones` (`slot()`, `place()`, `attrFor()`).
 - Never mix stateful and stateless patterns.
 
 ## 2. Stateful Components (`Totoglu\Htmx\Component`)
@@ -198,90 +200,145 @@ class Counter extends Component
 }
 ```
 
-## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`)
+## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`) & `HtmxCache`
 
-Use this for pure presentation (like atomic design elements: Button, Card, Notice).
+Use `Totoglu\Htmx\Ui` for pure presentation (atomic elements like `Title`, `Badge`, `Button`, `Image` and container layouts like `Card`, `Layout`, `Overlay`, `Alert`, `Headline`).
 
-- **NO State/Public Properties:** Use the `public array $defaultParams` property instead.
-- **Parameter Management (`ParameterBag`):** Access props safely using strict typed methods off `$this->parameters` e.g. `getString('key')`, `getInt('key')`, `getBool('key')`, `getArray('key')`. Quick mixed access is available via `$this->param('key')`.
-- **Attribute Management (`AttributeBag`):** Modifying HTML attributes is fluent. Example: `$this->attributes->addClass('active')->removeClass('hidden')->toggleClass('uk-open', true)->id('my-id')`.
-- **Rendering Attributes:** You MUST echo `$this->attributes->render()` inside the root HTML node.
-- **Instantiation:** Whenever possible, use the static `make()` factory method. Example: `Alert::make(['type' => 'info'])->addClass('my-2')->render()`.
-- **Children:** Render nested children via `$this->renderChildren()`.
+- **NO State/Public Domain Properties:** Define structural parameters in `public array $shapeParams = []` and dynamic content parameters in `public array $slotParams = []` (or `public array $defaultParams = []` for simple `render()` elements).
+- **Value Gate (`$valueGateKeys`, `hasValue()`, `renderIfHasValue()`):**
+  - Declare `protected array $valueGateKeys = ['text'];` (or `['label', 'icon']`, `['src']`) on atomic elements so empty elements return `''` before computing a shape hash or touching `HtmxCache`.
+  - Container elements evaluate child `Ui` slots via `renderIfHasValue()`; if all zones and children evaluate to `''`, the container short-circuits and returns `''`.
+- **Component-Defined Zones (`$zones`, `$defaultZones`, `slot()`, `place()`):**
+  - Declare valid layout zones in `protected array $zones = [...]` (flat list `['left', 'center', 'right']` or grouped map `['top' => ['top-left', 'top', 'top-right'], 'center' => ['left', 'center', 'right']]`) and default item placements in `protected array $defaultZones = ['badge' => 'top-left', 'title' => 'center']`.
+  - Assign content with `$ui->slot('badge', Badge::make(['label' => 'NEW']))` and relocate or reorder items with `$ui->place('badge', 'bottom-right')` or `$ui->place('subtitle', 'center', 'before:title')`. Placing into an undeclared zone throws `InvalidArgumentException`.
+- **Two-Phase Shape Compilation (`resolveShape()` + `compileTemplate()`):**
+  - Override `protected function resolveShape(): array` (runs only on cache miss) to resolve `$shapeParams` and prepend base classes (`$this->prependClass(...)`).
+  - Override `protected function compileTemplate(array $shape): string` (runs only on cache miss) to return a PHP closure string (`static function (array $s, array $attrs, string $children): string { ... }`) using `self::compileOpenTag($tag, $shape['classAttr'])` and `self::compileZoneItemsExpr($shape['zoneMap']['center'] ?? [])`.
+  - Runtime attributes (`hx-*`, `data-*`, `id`, `href`) and named sub-element bags (`$ui->for('link')->set('href', ...)->hxAction(...)`) are injected via `$attrs['root']` / `$attrs['link']` at runtime without creating new shape cache files.
+- **Full-Output Memoization (`memo()`):** Call `->memo(true)` (or `->memo(true, persist: true)`) on repeated identical leaf UI elements.
+- **Instantiation:** Always use the static `make()` factory (`Card::make(['variant' => 'elevated'])->slot(...)`).
 
 ### Ui HTMX v4 Helper Methods (all chainable fluent API)
 
-These map directly to HTMX v4 attributes. Call them on any Ui instance:
+These map directly to HTMX v4 attributes. Call them on any Ui instance (or sub-element bag via `$ui->for('link')`):
 
 ```php
 $btn = Button::make(['label' => 'Save'])
-    // === v4 FORM SYNTAX (preferred) ===
-    ->action('/submit')                    // hx-action="/submit"
-    ->method('post')                       // hx-method="post"
-    ->query('/search')                     // hx-query="/search"
-    ->config(['history' => false])         // hx-config='{"history":false}'
-    ->config('{"indicator":"#spinner"}')   // hx-config also accepts JSON string
+	// === v4 FORM SYNTAX (preferred) ===
+	->action('/submit')                    // hx-action="/submit"
+	->method('post')                       // hx-method="post"
+	->hxAction('/submit', 'POST')          // shorthand: hx-action="/submit" hx-method="POST"
+	->query('/search')                     // hx-query="/search"
+	->config(['history' => false])         // hx-config='{"history":false}'
+	->config('{"indicator":"#spinner"}')   // hx-config also accepts JSON string
 
-    // === v4 BEHAVIOR FLAGS ===
-    ->ignore()                             // hx-ignore (skip processing this subtree)
-    ->disable()                            // hx-disable (disable self during request)
-    ->disable('.form-inputs')              // hx-disable=".form-inputs" (CSS selector)
-    ->validate()                           // hx-validate (trigger native HTML5 validation)
+	// === v4 BEHAVIOR FLAGS ===
+	->ignore()                             // hx-ignore (skip processing this subtree)
+	->disable()                            // hx-disable (disable self during request)
+	->disable('.form-inputs')              // hx-disable=".form-inputs" (CSS selector)
+	->validate()                           // hx-validate (trigger native HTML5 validation)
 
-    // === v4 PER-STATUS SWAP CONFIG ===
-    ->status(422, 'swap:outerMorph target:#errors')   // hx-status:422="..."
-    ->status('*', 'swap:innerHTML')                    // hx-status:*="..."
+	// === v4 PER-STATUS SWAP CONFIG ===
+	->status(422, 'swap:outerMorph target:#errors')   // hx-status:422="..."
+	->status('*', 'swap:innerHTML')                    // hx-status:*="..."
 
-    // === v4 ACTION TRIGGER (for submit buttons) ===
-    ->actionTrigger('save')               // name="__htmx_action" value="save" + type=submit
+	// === v4 ACTION TRIGGER (for submit buttons) ===
+	->actionTrigger('save')               // name="__htmx_action" value="save" + type=submit
 
-    // === LEGACY / SHARED HELPERS (still work in v4) ===
-    ->target('#wrapper')                  // hx-target
-    ->swap('outerMorph')                  // hx-swap
-    ->vals(['__htmx_action' => 'save'])   // hx-vals (prefer actionTrigger for actions)
-    ->boost()                             // hx-boost="true"
-    ->confirm('Are you sure?')            // hx-confirm
-    ->prompt('Your name:')                // hx-prompt
-    ->indicator('#spinner')               // hx-indicator
-    ->include('#extra-fields')            // hx-include
-    ->params('*')                         // hx-params
-    ->trigger('click, keyup[key==Enter]') // hx-trigger
-    ->sync('#other:abort')                // hx-sync
-    ->encoding('multipart/form-data')     // enctype (for file uploads)
-    ->pushUrl()                           // hx-push-url="true"
-    ->replaceUrl();                       // hx-replace-url="true"
+	// === LEGACY / SHARED HELPERS (still work in v4) ===
+	->target('#wrapper')                  // hx-target
+	->swap('outerMorph')                  // hx-swap
+	->vals(['__htmx_action' => 'save'])   // hx-vals (prefer actionTrigger for actions)
+	->boost()                             // hx-boost="true"
+	->confirm('Are you sure?')            // hx-confirm
+	->prompt('Your name:')                // hx-prompt
+	->indicator('#spinner')               // hx-indicator
+	->include('#extra-fields')            // hx-include
+	->params('*')                         // hx-params
+	->trigger('click, keyup[key==Enter]') // hx-trigger
+	->sync('#other:abort')                // hx-sync
+	->encoding('multipart/form-data')     // enctype (for file uploads)
+	->pushUrl()                           // hx-push-url="true"
+	->replaceUrl();                       // hx-replace-url="true"
 ```
 
-### Example: HTMX v4 UI Element
+### Example: Compiled HTMX v4 UI Element (Shape Cache + Zones + Value Gate)
 
 ```php
+<?php
+
+declare(strict_types=1);
+
 namespace Htmx\Ui;
 
 use Totoglu\Htmx\Ui;
 
-class Alert extends Ui
+class Card extends Ui
 {
-    public array $defaultParams = [
-        'message' => 'Default alert',
-        'type'    => 'info',
-    ];
+	public bool $isContainer = true;
+	public string $name = 'ui-card';
 
-    public function render(): string
-    {
-        $variantMap = [
-            'error'   => 'bg-red-500 text-white',
-            'info'    => 'bg-blue-500 text-white',
-            'success' => 'bg-green-500 text-white',
-        ];
-        $this->attributes->addClass(
-            'p-4 rounded shadow-sm transition ' .
-            ($variantMap[$this->parameters->getString('type')] ?? $variantMap['info'])
-        );
+	public array $shapeParams = [
+		'variant' => 'elevated',
+		'linked' => false,
+	];
 
-        return "<div {$this->attributes->render()}>"
-            . htmlspecialchars($this->parameters->getString('message'), ENT_QUOTES)
-            . "</div>";
-    }
+	public array $slotParams = [
+		'badge' => '',
+		'title' => '',
+		'body' => '',
+		'footer' => '',
+	];
+
+	protected array $zones = [
+		'top' => ['top-left', 'top-right'],
+		'center' => ['center'],
+		'bottom' => ['bottom'],
+	];
+
+	protected array $defaultZones = [
+		'badge' => 'top-left',
+		'title' => 'center',
+		'body' => 'center',
+		'footer' => 'bottom',
+	];
+
+	protected function configureChildUi(string $item, Ui $child): void
+	{
+		if ($item === 'title') {
+			$child->addClass('ui-card-heading');
+		}
+	}
+
+	protected function resolveShape(): array
+	{
+		$variant = (string) $this->parameters->get('variant', 'elevated');
+		$this->prependClass(['ui-card', "ui-card-{$variant}"]);
+		return parent::resolveShape();
+	}
+
+	protected function compileTemplate(array $shape): string
+	{
+		$open = self::compileOpenTag('article', (string) $shape['classAttr']);
+		$zoneMap = $shape['zoneMap'];
+		$tlExpr = self::compileZoneItemsExpr($zoneMap['top-left'] ?? []);
+		$trExpr = self::compileZoneItemsExpr($zoneMap['top-right'] ?? []);
+		$cExpr = self::compileZoneItemsExpr($zoneMap['center'] ?? []);
+		$bExpr = self::compileZoneItemsExpr($zoneMap['bottom'] ?? []);
+
+		return "static function (array \$s, array \$attrs, string \$children): string {\n"
+			. "\t\$html = {$open};\n"
+			. "\t\$tl = {$tlExpr}; \$tr = {$trExpr};\n"
+			. "\tif (\$tl !== '' || \$tr !== '') {\n"
+			. "\t\t\$html .= '<header class=\"ui-card-top\">' . \$tl . \$tr . '</header>';\n"
+			. "\t}\n"
+			. "\t\$c = {$cExpr} . \$children;\n"
+			. "\tif (\$c !== '') { \$html .= '<div class=\"ui-card-body\">' . \$c . '</div>'; }\n"
+			. "\t\$b = {$bExpr};\n"
+			. "\tif (\$b !== '') { \$html .= '<footer class=\"ui-card-footer\">' . \$b . '</footer>'; }\n"
+			. "\treturn \$html . '</article>';\n"
+			. "}";
+	}
 }
 ```
 
@@ -409,12 +466,13 @@ The module validates these against the following list (case-insensitive):
 - **Position swaps:** `beforebegin` (alias: `before`), `afterbegin` (alias: `prepend`), `beforeend` (alias: `append`), `afterend` (alias: `after`)
 - **No-op:** `none`
 
-## 5. CLI Scaffolding
+## 5. CLI Scaffolding & Cache Management
 
-Always use the ProcessWire Console to scaffold new UI elements or Components. This ensures proper boilerplate and namespaces are created safely.
+Always use the ProcessWire Console to scaffold new UI elements or Components and manage `HtmxCache`:
 
 - `php vendor/bin/wire make:htmx:component {Name} [--dir={CustomRelativePath}]`
 - `php vendor/bin/wire make:htmx:ui {Name} [--dir={CustomRelativePath}]`
+- `php vendor/bin/wire htmx:cache:clear [--stats] [--prune] [--days=7] [--class={ShortOrFqcn}] [--json]`
 
 ## 6. Debugging (TracyDebugger)
 
