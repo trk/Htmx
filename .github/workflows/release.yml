@@ -38,7 +38,7 @@ jobs:
         run: |
           VERSION=$(php -r '
             $c = file_get_contents(getenv("VERSION_FILE"));
-            if (!is_string($c) || !preg_match("/['\"].*?version.*?['\"]\s*=>\s*['\"]?([0-9\.]+)['\"]?/", $c, $m)) {
+            if (!is_string($c) || !preg_match("/[\x27\"].*?version.*?[\x27\"]\s*=>\s*[\x27\"]?([0-9\.]+)[\x27\"]?/", $c, $m)) {
               exit(1);
             }
             $v = $m[1];
