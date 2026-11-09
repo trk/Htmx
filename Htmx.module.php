@@ -204,8 +204,17 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		});
 
 		$this->wire()->addHookAfter('Page::render', function (HookEvent $e): void {
-			$e->replace = true;
+			if (!empty($_SERVER['HTTP_X_INERTIA'])) {
+				return;
+			}
+
 			$html = (string) $e->return;
+			$trimmed = ltrim($html);
+			if ($trimmed !== '' && ($trimmed[0] === '{' || $trimmed[0] === '[')) {
+				return;
+			}
+
+			$e->replace = true;
 
 			// 1. Target Auto-Extraction (Partial Render)
 			if ($this->autoExtractTargets && $this->request->isHtmx() && !$this->request->isBoosted()) {
