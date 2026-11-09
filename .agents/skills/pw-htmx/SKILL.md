@@ -2,7 +2,7 @@
 name: pw-htmx
 description: Use when working with Totoglu\Htmx Components, Ui elements, HtmxCache ($htmxCache), UI Shape Compilation, Zones/Slots, Value Gates, HTMX 4 swaps, <hx-partial> elements, OOB fragments, deferred triggers, or signed state payload management in the ProcessWire server-driven component model. ALWAYS activates for any Totoglu\Htmx or htmx-related code generation in this project.
 metadata:
-  version: 213
+  version: 214
   htmx-version: 4
   processwire-version: ">=3.0.271"
   php-version: ">=8.4"

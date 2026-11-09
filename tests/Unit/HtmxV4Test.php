@@ -519,9 +519,9 @@ describe('Totoglu\Htmx\Component & Htmx::handleEndpoint (HTMX v4)', function ():
 		}
 	});
 
-	it('cleans up cache and fuel on ___uninstall() and declares stable version 2.1.3 in composer.json', function () {
+	it('cleans up cache and fuel on ___uninstall() and declares stable version 2.1.4 in composer.json', function () {
 		$composer = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/composer.json'), true);
-		expect($composer['version'] ?? null)->toBe('2.1.3')
+		expect($composer['version'] ?? null)->toBe('2.1.4')
 			->and($composer['require']['php'] ?? null)->toBe('>=8.4');
 
 		$cache = new class {

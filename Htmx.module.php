@@ -77,7 +77,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	{
 		return [
 			'title' => 'HTMX',
-			'version' => 213,
+			'version' => 214,
 			'summary' => 'HTMX v4 integration: native Request/Response API (HX-Request-Type, HX-Source, HX-Reselect, deferred triggers, <hx-partial>), state-aware Components, OOB swaps, Morph/TextContent swaps, and SSE/WS extensions.',
 			'href' => 'https://github.com/trk/Htmx',
 			'author' => 'Iskender TOTOGLU @trk @ukyo',
