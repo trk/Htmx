@@ -582,7 +582,8 @@ class TestCachedCounterComponent extends Component
 			->slot(
 				'actions',
 				TestButtonUi::make(['label' => '+1'])
-					->hxAction($this->requestUrl(), 'POST')
+					->action($this->requestUrl())
+					->method('post')
 					->actionTrigger('increment')
 			)
 			->addChild($this->renderStatePayload());
@@ -727,8 +728,9 @@ describe('Two-Phase Shape Compilation & Child Class Isolation', function (): voi
 			$card = TestCardUi::make(['variant' => 'elevated'])
 				->setAttribute('id', "card-{$i}")
 				->data('item-id', $i)
-				->hxAction('/hx/req', 'POST')
-				->hxVals(['itemId' => $i])
+				->action('/hx/req')
+				->method('post')
+				->vals(['itemId' => $i])
 				->slot('badge', TestBadgeUi::make(['label' => "Badge #{$i}", 'variant' => 'info']))
 				->slot('title', TestTitleUi::make(['text' => "Card Title <{$i}>"]))
 				->slot('body', "Body content {$i}");
@@ -749,7 +751,7 @@ describe('Two-Phase Shape Compilation & Child Class Isolation', function (): voi
 			->and(TestCardUi::$resolveShapeCalls)->toBe(1)
 			->and(TestBadgeUi::$resolveShapeCalls)->toBe(1)
 			->and(TestTitleUi::$resolveShapeCalls)->toBe(1)
-			->and($stats['hits']['memory'])->toBe((50 - 1) * 3);
+			->and($stats['metrics']['uiHits'])->toBe((50 - 1) * 3);
 	});
 
 	it('generates a new child shape cache file when a child UI element inside Card changes its class or variant', function (): void {
@@ -779,10 +781,11 @@ describe('Two-Phase Shape Compilation & Child Class Isolation', function (): voi
 			$card->for('link')
 				->addClass('ui-card-stretch-link')
 				->set('href', "/products/{$i}")
-				->hxAction("/products/{$i}/preview", 'GET');
+				->hx('action', "/products/{$i}/preview")
+				->hx('method', 'get');
 
 			$html = (string) $card;
-			expect($html)->toContain('<a class="ui-card-stretch-link" href="/products/' . $i . '" hx-action="/products/' . $i . '/preview" hx-method="GET">');
+			expect($html)->toContain('<a class="ui-card-stretch-link" href="/products/' . $i . '" hx-action="/products/' . $i . '/preview" hx-method="get">');
 		}
 
 		expect(TestCardUi::$resolveShapeCalls)->toBe(1);
@@ -890,14 +893,14 @@ describe('HtmxCache Memoization, mtime Self-Pruning & LRU Eviction', function ()
 		$b2 = (string) TestBadgeUi::make(['label' => 'PRO', 'variant' => 'success'])->memo(true);
 
 		expect($b1)->toBe($b2)
-			->and($this->htmxCache->stats()['hits']['memo'])->toBe(1);
+			->and($this->htmxCache->stats()['metrics']['memoHits'])->toBe(1);
 	});
 
 	it('automatically prunes stale mtime files and enforces maxShapesPerClass LRU cap', function (): void {
 		$this->htmxCache->setMaxShapesPerClass(4);
 
 		// Create a fake stale mtime file in TestBadgeUi's cache folder
-		$badgeDir = $this->tempCacheDir . '/ui/TestBadgeUi/';
+		$badgeDir = $this->htmxCache->getUiClassDir(TestBadgeUi::class);
 		@mkdir($badgeDir, 0755, true);
 		$staleFile = $badgeDir . 'TestBadgeUi_1000000000_deadbeef.php';
 		file_put_contents($staleFile, "<?php return static fn() => '';");
@@ -944,8 +947,8 @@ describe('HtmxCache Memoization, mtime Self-Pruning & LRU Eviction', function ()
 			->and(TestCardUi::$resolveShapeCalls)->toBe(0)
 			->and(TestTitleUi::$resolveShapeCalls)->toBe(0)
 			->and(TestBadgeUi::$resolveShapeCalls)->toBe(0)
-			->and($this->htmxCache->stats()['hits']['memory'])->toBe(2)
-			->and($this->htmxCache->stats()['hits']['memo'])->toBe(1);
+			->and($this->htmxCache->stats()['metrics']['uiHits'])->toBe(2)
+			->and($this->htmxCache->stats()['metrics']['memoHits'])->toBe(1);
 	});
 });
 
@@ -993,7 +996,7 @@ describe('Component Compiled Reflection Schema & Tokenized Render Cache', functi
 
 		// render() was called ONLY ONCE, second instance hit Component Render Cache!
 		expect(TestCachedCounterComponent::$renderCalls)->toBe(1)
-			->and($this->htmxCache->stats()['hits']['render'])->toBe(1);
+			->and($this->htmxCache->stats()['metrics']['renderHits'])->toBe(1);
 
 		// Yet each instance has its own unique ID in both DOM and signed hx__state payload!
 		expect($cmp1->id)->not->toBe($cmp2->id)
@@ -1021,7 +1024,7 @@ describe('Component Compiled Reflection Schema & Tokenized Render Cache', functi
 		$html = (string) $cmp;
 
 		expect($html)->toContain('Invalid Run')
-			->and($this->htmxCache->stats()['hits']['render'])->toBe(0);
+			->and($this->htmxCache->stats()['metrics']['renderHits'])->toBe(0);
 
 		// Subsequent clean render should still execute render() because the 422 response was not cached
 		$cleanCmp = (new TestCachedCounterComponent())
@@ -1046,7 +1049,7 @@ describe('Component Compiled Reflection Schema & Tokenized Render Cache', functi
 		expect($expired)->toBeNull();
 
 		// Force the existing render cache file's createdAt timestamp into the past
-		$cmpDir = $this->tempCacheDir . '/components/TestCachedCounterComponent/';
+		$cmpDir = $this->htmxCache->getComponentClassDir(TestCachedCounterComponent::class);
 		foreach (glob($cmpDir . '*_render_*.php') ?: [] as $rf) {
 			$data = include $rf;
 			if (is_array($data)) {
@@ -1062,7 +1065,7 @@ describe('Component Compiled Reflection Schema & Tokenized Render Cache', functi
 		(string) $cmp2;
 		// Because the cached render entry expired, render() was invoked again and schema hit came from disk!
 		expect(TestCachedCounterComponent::$renderCalls)->toBe(2)
-			->and($this->htmxCache->stats()['hits']['schema'])->toBeGreaterThanOrEqual(1);
+			->and($this->htmxCache->stats()['metrics']['schemaHits'])->toBeGreaterThanOrEqual(1);
 	});
 });
 

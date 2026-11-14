@@ -175,9 +175,6 @@ final class LayeringScanner
 		$disallowedModules = [];
 		foreach (glob(dirname(self::moduleRoot()) . '/*', GLOB_ONLYDIR) ?: [] as $siblingDir) {
 			$otherMod = basename($siblingDir);
-			if (!str_starts_with($otherMod, 'Wire') && $otherMod !== 'Htmx') {
-				continue;
-			}
 			if (!in_array($otherMod, self::ALLOWED_MODULES, true)) {
 				$disallowedModules[] = $otherMod;
 			}
