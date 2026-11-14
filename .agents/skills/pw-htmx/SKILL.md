@@ -88,7 +88,7 @@ Convert the general HTMX 4 docs above into these `Totoglu\Htmx` implementation r
 - **Prefer module APIs:** Reach for `$this->requestUrl()`, `$this->htmx->response`, `$this->htmx->fragment`, and built-in hydration before custom JavaScript workarounds.
 - **Respect explicit inheritance:** In HTMX 4, parent `hx-*` attributes do not implicitly flow downward unless `:inherited` is present.
 - **Design error swaps deliberately:** HTMX 4 swaps most non-204/304 responses by default, so validation and error UI should be planned with `422`, `HX-Retarget`, `HX-Reselect`, and `hx-status:*`.
-- **`<hx-partial>` is primary, OOB is secondary:** Use `Fragment::addPartial()` (renders `<hx-partial>`) for side updates while keeping the component render as the canonical UI state. Legacy OOB (`addOobSwap()`) still works but is v2-style.
+- **`<hx-partial>` is the sole secondary fragment API:** Use `Fragment::addPartial()` (renders `<hx-partial>`, flushed via `Fragment::renderPartials()`) for side updates while keeping the component render as the canonical UI state. Legacy v2 `addOobSwap()`, `addHyperscript()`, and `getOobSwaps()` have been removed.
 - **Keep DOM anchors stable:** Stable IDs are required for reliable targets, repeated component round-trips, transitions, and OOB/partial behavior.
 - **Use HTMX 4 extension semantics:** When touching extensions, rely on `registerExtension()`, colon-format modern event names (`htmx:before:send`, `htmx:after:swap`, etc.), and `detail.ctx`.
 - **Do not create browser-owned truth:** Avoid replacing signed server hydration with frontend state stores.
@@ -239,7 +239,8 @@ class Panel extends Ui
 // Usage anywhere in PHP:
 // echo Panel::make(['type' => 'primary', 'dismissible' => true])
 //     ->slot('title', Title::make(['text' => 'Alert']))
-//     ->hxAction('/hx/req', 'POST')
+//     ->action('/hx/req')
+//     ->method('post')
 //     ->swap('outerMorph');
 ```
 
@@ -255,20 +256,22 @@ This is the primary abstraction for stateful behavior in this project. Prefer it
 4. Validation errors use `$this->validationError(target: ?, select: ?, httpCode: 422)` and pair with `hx-status:422="..."` on the form.
 5. Read-only (idempotent) server calls use methods named `query*()` and may be invoked by GET without CSRF.
 6. For deferred client events after swap/settle: use `triggerAfterSwap()` + `triggerAfterSettle()` (merge into ONE HX-Trigger header automatically).
-7. For secondary DOM updates: prefer `$this->htmx->fragment->addPartial()` (v4 `<hx-partial>`) over legacy `addOobSwap()`.
+7. For secondary DOM updates: use `$this->htmx->fragment->addPartial()` (HTMX 4 `<hx-partial>`; legacy `addOobSwap()` does not exist).
 8. Use `outerMorph` or `innerMorph` as swap styles — they minimize DOM churn and preserve UIkit JS node references.
+9. Override `public function authorize(): bool` and `public function authorizeAction(string $action): bool` for component/action RBAC (enforced before `executeAction()` and `renderToString()`, returning HTTP `403` on denial).
 
 **HTMX v4 Component Lifecycle (every request):**
 
 1. `new ComponentClass()` (internal, NEVER override `__construct()`)
 2. `fill(array $props)` — first render only, receives `renderComponent(Class::class, $props)` payload
 3. `mount()` — first render one-time init
-4. `hydrate()` — restores signed public properties from `hx__state` payload (POST/GET); validates HMAC; re-fetches ProcessWire object types from IDs; GET-boosted reads `hx__state` query param too
-5. `executeAction()` — determines action from `__htmx_action` POST/GET field; POST mutations run normally; GET calls `query*` methods without CSRF requirement
-6. `beforeRender()` — optional override (set custom `$this->view`)
-7. `render()` — returns HTML string (main swap target); rendered via inline string, `.view.php` file, or `Ui` subclass
-8. `afterRender()` — post-process (rarely overridden)
-9. Response assembled: main render + OOB swaps + `<hx-partial>` elements + headers flushed via `Response::applyHeaders()`
+4. `hydrate()` — verifies `hx__state` via `SignedStateCodec` (HKDF-SHA256 key requiring `>= 16`-char `userAuthSalt`, `__uid`, `__sid` session fingerprint, `__ep`, `__pid` page viewability, `__adm` admin context, and multi-candidate `hx__state[]` sibling array matching) and restores ProcessWire object types from IDs
+5. `authorize()` & `authorizeAction(string $action)` & `renderReady()` — checked before `executeAction()` and `renderToString()`; `false` aborts with HTTP `403` (`WirePermissionException`)
+6. `executeAction()` — determines action from `__htmx_action` POST/GET field; POST mutations verify CSRF; GET/QUERY calls `query*` methods without CSRF requirement
+7. `beforeRender()` — optional override (set custom `$this->view`)
+8. `render()` — returns HTML string (main swap target); rendered via inline string, confined `.php` view file (`ConfinedViewRenderer`), or `Ui` subclass
+9. `afterRender()` — post-process (rarely overridden)
+10. Response assembled: main render + `<hx-partial>` elements (`Fragment::renderPartials()`) + headers flushed via `Response::applyHeaders()`
 
 **HTMX v4 Component Request/Response helper quick-reference:**
 
@@ -306,11 +309,9 @@ $this->validationError(target: '#form', select: '#form-errors');
 $this->htmx->fragment->addPartial(
     target: '#toasts',                // hx-target="<target>" on <hx-partial>
     html:   '<div id="toast-1">✔ Saved</div>',
-    swap:   'outerMorph',             // default: outerMorph  (v4 preferred)
+    swap:   'outerMorph',             // default: outerMorph (validated via isValidSwapStyle())
     select: null,                     // optional inner hx-select
 );
-$this->htmx->fragment->addOobSwap('#header-cart', '<span id="header-cart">3</span>');  // legacy compat
-$this->htmx->fragment->addHyperscript('body.classList.add("ok")');
 ```
 
 **Full HTMX 4 Component example (correct output form):**
@@ -424,15 +425,13 @@ class ItemProcessor extends Component
 }
 ```
 
-### Phase 3: Out-of-Band (OOB) & `<hx-partial>` Elements + Extraneous Response Modification
+### Phase 3: `<hx-partial>` Elements + Extraneous Response Modification
 
 When dictating parallel DOM updates across disparate sections distinct from the originating component during a single request, harness the embedded API layers inherent in the `Totoglu\Htmx` framework.
 
 - Access uniformly via `$this->htmx` through any `Component` or `Ui` class.
-- **v4 preferred `<hx-partial>` elements (new in HTMX 4):**
+- **HTMX 4 `<hx-partial>` elements:**
   `$this->htmx->fragment->addPartial(target: '#toasts', html: '<div id="t1">OK</div>', swap: 'outerMorph');`
-- **Legacy OOB swaps (still supported, v2 compat):**
-  `$this->htmx->fragment->addOobSwap('#header-cart', '<span id="header-cart">3 Items</span>');`
 - **Navigation/redirects (native HTMX headers):**
   `$this->htmx->response->redirect('/success');`
 - **Full page refresh:**
@@ -487,6 +486,8 @@ Use the `--dir` option if placing elements outside the default `site/components`
 11. 🚫 **Emitting `HX-Trigger-After-Swap` / `HX-Trigger-After-Settle` headers directly.** MUST use `triggerAfterSwap()` / `triggerAfterSettle()` which merge into ONE HX-Trigger header decoded by `pw-htmx-runtime.js`.
 12. 🚫 **Using deprecated `HX-Trigger-Name` (removed in v4).** MUST use `rawSource()` / `sourceTag()` from HX-Source.
 13. 🚫 **Forgetting `hx-status:*` around forms with validation.** HTMX 4 swaps 422 by default; status-driven retarget/reselect avoids surprises.
+14. 🚫 **Calling removed legacy/alias methods (`hxAction`, `hxMethod`, `hxTarget`, `hxSwap`, `addOobSwap`, `addHyperscript`, `getOobSwaps`, `historyRestore`, `Request::source()`, `Htmx::renderScripts()`).** Use canonical HTMX 4 methods (`action()`, `method()`, `target()`, `swap()`, `addPartial()`, `renderPartials()`, `isHistoryRestore()`, `rawSource()`, `renderTags()`).
+15. 🚫 **Setting raw `on*` or `(data-)hx-on*` attributes.** `AttributeBag` rejects inline event-handler attributes automatically.
 
 ## Context Awareness (ProcessWire API Docs)
 

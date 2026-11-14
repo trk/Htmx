@@ -107,9 +107,9 @@ In the ProcessWire admin, the module loads `resources/htmx/pw-htmx-guard.js` to 
 - If a full document is detected, the swap is cancelled.
 - You can override the alert message by defining `window.__pwHtmxGuardMessage` before the swap occurs.
 
-## 🐞 Debugging with TracyDebugger (Debug Mode Only)
+## 🐞 Debugging with Tracy Bar (Debug Mode Only)
 
-When **ProcessWire debug mode** is enabled and the **TracyDebugger** module is installed, Htmx can provide extra debugging support (enabled by default via the module config option `tracySupport`):
+When **ProcessWire debug mode** is enabled and `\Tracy\Debugger` is active, Htmx can provide extra debugging support (enabled by default via the module config option `tracySupport`):
 
 - Adds a **Tracy bar panel** named **HTMX** with request/endpoint details.
 - Emits **debug response headers** on HTMX requests (useful in the browser Network tab):
@@ -134,10 +134,11 @@ These values are designed to be stable and safe to expose in headers (no sensiti
 - `bad_hmac` — HMAC signature did not match (tampering or wrong salt)
 - `state_expired` — state payload TTL expired (HTTP 419 Replay Protection)
 - `csrf_failed` — ProcessWire CSRF token validation failed on POST mutation (HTTP 403)
+- `unauthorized` — `Component::authorize()` or `Component::authorizeAction()` denied execution (HTTP 403)
 - `invalid_state` — decoded state structure missing `__cmp` or invalid payload structure
 - `component_unregistered` — component class is not registered with the global endpoint
 - `invalid_component` — resolved component class missing or not a valid `Totoglu\Htmx\Component`
-- `missing_salt` — `$config->userAuthSalt` is missing or empty
+- `missing_salt` — `$config->userAuthSalt` is missing or shorter than 16 characters
 - `exception` — unhandled exception during hydrate/action/render
 
 ### Client Debug Toggle (Admin / Debug Only)
@@ -323,11 +324,13 @@ echo $htmx->renderComponent(LikeButton::class, ['likes' => 0], $btnView);
 
 ## 🔒 Security & Data Integrity
 
-Working with state on the client side requires strict validation to prevent tampering.
+Working with state on the client side requires strict validation to prevent tampering and cross-context replay.
 
-1. **Instance Isolation:** Every component is dynamically assigned a unique internal `__id`. Two instances of the same component on the same page will never collide or mix state.
-2. **Cryptographic Signatures:** The HTML payload outputted by `$this->renderStatePayload()` is HMAC-SHA256 signed using the ProcessWire `$config->userAuthSalt` configuration. Any manual tampering of the hidden input in the browser will result in immediate rejection.
-3. **Replay Protection (TTL):** State payloads have an expiration time (default 24 hours). You can customize this by passing `$this->renderStatePayload(ttlHours: 2)`.
+1. **Instance & Sibling Isolation:** Every component is dynamically assigned a unique internal `__id`. Multiple sibling components inside the same form (`hx__state[]` arrays) are matched strictly by `__cmp` and `HX-Target` without cross-component state confusion.
+2. **Domain-Separated HKDF-HMAC Signatures (`SignedStateCodec`):** The payload outputted by `$this->renderStatePayload()` is signed with a domain-separated HKDF-SHA256 key derived from `$config->userAuthSalt` (requiring at least 16 characters of entropy). Any manual tampering of the hidden input is immediately rejected.
+3. **Session, Principal & Context Binding (`__uid`, `__sid`, `__pid`, `__adm`):** State payloads are cryptographically bound to the active user ID, session fingerprint (blocking guest-to-guest session replay), originating page ID (`viewable()` verified on every round-trip), and admin context.
+4. **Lifecycle Authorization (`authorize()` & `authorizeAction()`):** Override `public function authorize(): bool` and `public function authorizeAction(string $action): bool` on any `Component` to enforce RBAC after hydration and before `executeAction()` or rendering (automatically returning HTTP 403 on denial).
+5. **Replay Protection (TTL):** State payloads have an expiration time (default 24 hours). Customize via `$this->renderStatePayload(ttlHours: 2)`.
 
 ---
 
@@ -362,7 +365,7 @@ if ($r->isHtmx()) {
     // Other context headers
     $isBoosted    = $r->isBoosted();
     $promptAnswer = $r->prompt();
-    $isHistory    = $r->historyRestore();
+    $isHistory    = $r->isHistoryRestore();
     $allHeaders   = $r->headers();      // all HX-* headers keyed without HX- prefix
 
     // Automatically validate ProcessWire CSRF with HTTP 403 handling
@@ -402,22 +405,15 @@ $resp
     ->triggerAfterSwap('ui:refreshed', ['count' => 3])         // after swap
     ->triggerAfterSettle('closeModal');                         // after settle / animations
 
-// === Fragment Swapping: OOB + v4 NEW <hx-partial> elements ===
+// === Secondary DOM Fragments: HTMX v4 <hx-partial> elements ===
 $frag = wire('htmx')->fragment;
 
-// Legacy OOB (still fully supported):
-$frag->addOobSwap('#header-cart', '<span id="header-cart">3</span>');
-
-// === HTMX v4 PREFERRED: <hx-partial> elements (addPartial) ===
 $frag->addPartial(
     target: '#toast-container',
     html:   '<div class="toast" id="toast-1">Added to cart ✔</div>',
     swap:   'outerMorph',
     select: null,
 );
-
-// Hyperscript out-of-band blocks:
-$frag->addHyperscript('document.body.classList.add("success")');
 ```
 
 ---
@@ -499,7 +495,7 @@ The module includes an independent, OPcache-backed compilation engine (`Totoglu\
 ### 2. Component-Defined Zones (`$zones`, `$defaultZones`, `slot()`, `place()`, `for()`)
 - Each `Ui` subclass defines its own valid `$zones` (flat `['left', 'center', 'right']` or grouped `['top' => ['top-left', 'top', 'top-right'], 'center' => ['left', 'center', 'right'], 'bottom' => ['bottom-left', 'bottom', 'bottom-right']]`).
 - Assign slots via `$card->slot('badge', Badge::make(['label' => 'NEW']))` and dynamically relocate or reorder items via `$card->place('badge', 'bottom-right')` or `$card->place('subtitle', 'center', 'before:title')`.
-- Target sub-element attributes without exploding shape cache files via `$card->for('link')->set('href', '/item/1')->hxAction('/item/1', 'GET')`.
+- Target sub-element attributes without exploding shape cache files via `$card->for('link')->set('href', '/item/1')->action('/item/1')->method('get')`.
 
 ### 3. Two-Phase Shape Compilation & Component Caching
 - **UI Shape Cache:** `resolveShape()` and `compileTemplate(array $shape)` run only on a cache miss, compiling a reusable PHP closure (`static function (array $s, array $attrs, string $children): string`) to disk. Rendering 50 cards with different titles, badges, and `hx-vals` compiles only **1 shape file** per unique structural layout.
@@ -536,7 +532,7 @@ php vendor/bin/wire htmx:cache:clear --json
 
 ## 🧪 Testing and Verification
 
-Run the automated Pest unit and architecture test suite (`HtmxCacheTest`, `HtmxV4Test`, and `LayeringTest`) via `vendor/bin/wire`:
+Run the automated Pest unit and architecture test suite (`HardeningAndArchitectureTest`, `HtmxCacheTest`, `HtmxV4Test`, and `LayeringTest`) via `vendor/bin/wire`:
 
 ```bash
 php vendor/bin/wire test site/modules/Htmx/tests/Unit

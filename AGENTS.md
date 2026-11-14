@@ -1,5 +1,5 @@
 ---
-description: "Use when working with Totoglu\\Htmx Components, Ui elements, HTMX swaps, OOB fragments, <hx-partial> elements, or state payload management. Complete HTMX v4 API reference."
+description: "Use when working with Totoglu\\Htmx Components, Ui elements, HTMX 4 swaps, <hx-partial> elements, or signed state payload management. Complete HTMX v4 API reference."
 ---
 
 # ProcessWire Htmx Module Guidelines for LLMs
@@ -37,7 +37,7 @@ These upstream v4 changes are implemented. Always use the NEW syntax in generate
 | N/A | `hx-config='{...}'` | Per-element JSON config |
 | N/A | `hx-validate` | Trigger native form validation on non-form triggers |
 | N/A | `hx-status:CODE="swap:S target:#foo"` | Per-status-code swap behavior |
-| `<div hx-swap-oob="...">` | `<hx-partial hx-target="#foo" hx-swap="outerMorph">...</hx-partial>` | Partial element preferred; OOB still works |
+| `<div hx-swap-oob="...">` | `<hx-partial hx-target="#foo" hx-swap="outerMorph">...</hx-partial>` | Emitted via `Fragment::addPartial()` and flushed via `Fragment::renderPartials()` |
 | `HX-Trigger-Name` header | `HX-Source: "button#save-form"` (format `tagName#id`) | `triggerName()` falls back to POST for compat |
 | N/A | `HX-Request-Type: "partial" \| "full"` | Distinguishes hx-boost full docs from partials |
 | `HX-Trigger-After-Swap`, `HX-Trigger-After-Settle` | Deferred events inside single `HX-Trigger` via `:swap` / `:settle` suffixes tunneled under `__pwHtmxAfterSwap` / `__pwHtmxAfterSettle` | `pw-htmx-runtime.js` decodes and dispatches synthetic events |
@@ -56,7 +56,7 @@ Translate the HTMX 4 references above into these module-specific implementation 
 - **Prefer module abstractions:** Use `$this->requestUrl()`, `$this->htmx->response`, `$this->htmx->fragment`, and built-in hydration behavior instead of ad hoc JavaScript glue.
 - **HTMX 4 inheritance is explicit:** Do not assume inherited `hx-*` behavior unless `:inherited` is present or the module explicitly wraps it.
 - **Status codes affect swaps:** HTMX 4 swaps most error responses by default. Design `422`, `HX-Retarget`, `HX-Reselect`, `hx-status:*`, and `validationError()` flows intentionally.
-- **OOB is complementary, `<hx-partial>` is preferred v4 syntax:** Use `Fragment::addPartial()` (renders `<hx-partial>`) for secondary DOM updates. OOB swaps are still supported via `addOobSwap()`.
+- **`<hx-partial>` is the sole secondary fragment API:** Use `Fragment::addPartial()` (renders `<hx-partial>`) for secondary DOM updates; `Fragment::renderPartials()` appends queued partials automatically. Legacy v2 `addOobSwap()`, `addHyperscript()`, and `getOobSwaps()` do not exist.
 - **Stable IDs matter:** Keep target IDs and wrapper IDs stable across swaps, especially for multi-instance components, transitions, and OOB/partial updates.
 - **Extensions follow v4 rules:** Use HTMX 4 colon-format lifecycle events (`htmx:before:send`, `htmx:after:request`, etc.), `registerExtension()`, and `detail.ctx` semantics when authoring or adapting extensions.
 - **No browser-owned state model:** Do not move authoritative state into frontend stores when the module already provides signed server-state hydration.
@@ -96,12 +96,13 @@ This is the core server-side component model in this project:
 
 1. `new ComponentClass()` (constructor is internal, never override)
 2. `fill(array $props)` — only on first render, receives props from `renderComponent()`
-3. `hydrate()` — restores signed public properties from `hx__state` POST/GET payload; validates HMAC signature; hydrates ProcessWire object types from IDs; on GET/hx-boosted requests, restores state from query string `hx__state` parameter
-4. `executeAction()` — determines action from `__htmx_action` POST value or `<input name="__htmx_action">`; POST action methods run normal; GET `query*` methods run without CSRF
-5. `beforeRender()` — optional override; set custom views (`$this->view = ...`)
-6. `render()` — returns HTML string (main swap target); rendered via inline string, `.view.php` file, or `Ui` subclass
-7. `afterRender()` — post-process (usually not overridden)
-8. Response is assembled: main render + OOB swaps + `<hx-partial>` elements; HTMX response headers are flushed via `Response::applyHeaders()`
+3. `mount()` (initial render) or `hydrate()` (round-trip) — `SignedStateCodec` verifies the domain-separated HKDF-SHA256 signature (`>= 16`-char `userAuthSalt`), TTL, session fingerprint (`__sid`), principal (`__uid`), endpoint (`__ep`), originating page (`__pid`, checking `viewable()`), and admin context (`__adm`), then restores public properties (including multi-candidate `hx__state[]` sibling arrays)
+4. `authorize()` & `authorizeAction(string $action)` & `renderReady()` — enforced *after* `mount()`/`hydrate()` and *before* `executeAction()` and `renderToString()`. Returning `false` from `authorize()` or `authorizeAction()` aborts with HTTP `403` (`WirePermissionException`)
+5. `executeAction()` — determines action from `__htmx_action` POST value or `<input name="__htmx_action">`; POST/PUT/PATCH/DELETE action methods verify CSRF; GET/QUERY `query*` methods run without CSRF
+6. `beforeRender()` — optional override; set custom views (`$this->view = ...`)
+7. `render()` — returns HTML string (main swap target); rendered via inline string, confined `.php` view file (`ConfinedViewRenderer`), or `Ui` subclass
+8. `afterRender()` — post-process (usually not overridden)
+9. Response is assembled: main render + `<hx-partial>` elements (`Fragment::renderPartials()`); HTMX response headers are flushed via `Response::applyHeaders()`
 
 ### Component-Level HTMX v4 Response Helpers
 
@@ -202,7 +203,7 @@ class Counter extends Component
 
 ## 3. Stateless UI Elements (`Totoglu\Htmx\Ui`) & `HtmxCache`
 
-Use `Totoglu\Htmx\Ui` for pure presentation (atomic elements like `Title`, `Badge`, `Button`, `Image` and container layouts like `Card`, `Layout`, `Overlay`, `Alert`, `Headline`).
+Use `Totoglu\Htmx\Ui` (which extends `ProcessWire\Wire`) for pure presentation (atomic elements like `Title`, `Badge`, `Button`, `Image` and container layouts like `Card`, `Layout`, `Overlay`, `Alert`, `Headline`). `Ui::make()` automatically wires the booted ProcessWire instance so `$this->wire()->*` and `$this->_('...')` translations work natively inside subclasses.
 
 - **NO State/Public Domain Properties:** Define structural parameters in `public array $shapeParams = []` and dynamic content parameters in `public array $slotParams = []` (or `public array $defaultParams = []` for simple `render()` elements).
 - **Value Gate (`$valueGateKeys`, `hasValue()`, `renderIfHasValue()`):**
@@ -214,20 +215,19 @@ Use `Totoglu\Htmx\Ui` for pure presentation (atomic elements like `Title`, `Badg
 - **Two-Phase Shape Compilation (`resolveShape()` + `compileTemplate()`):**
   - Override `protected function resolveShape(): array` (runs only on cache miss) to resolve `$shapeParams` and prepend base classes (`$this->prependClass(...)`).
   - Override `protected function compileTemplate(array $shape): string` (runs only on cache miss) to return a PHP closure string (`static function (array $s, array $attrs, string $children): string { ... }`) using `self::compileOpenTag($tag, $shape['classAttr'])` and `self::compileZoneItemsExpr($shape['zoneMap']['center'] ?? [])`.
-  - Runtime attributes (`hx-*`, `data-*`, `id`, `href`) and named sub-element bags (`$ui->for('link')->set('href', ...)->hxAction(...)`) are injected via `$attrs['root']` / `$attrs['link']` at runtime without creating new shape cache files.
-- **Full-Output Memoization (`memo()`):** Call `->memo(true)` (or `->memo(true, persist: true)`) on repeated identical leaf UI elements.
+  - Runtime attributes (`hx-*`, `data-*`, `id`, `href`) and named sub-element bags (`$ui->for('link')->set('href', ...)->set('hx-action', '/item')->set('hx-method', 'get')`) are injected via `$attrs['root']` / `$attrs['link']` at runtime without creating new shape cache files. Inline event handlers (`on*` and `(data-)hx-on*`) and cross-origin/protocol-relative URLs on `hx-action`/`hx-get`/`hx-post`/`hx-query` are blocked automatically by `AttributeBag`.
+- **Full-Output Memoization (`memo()`):** Call `->memo(true)` (or `->memo(true, persist: true)`) on repeated identical leaf UI elements (automatically isolated per active user language ID).
 - **Instantiation:** Always use the static `make()` factory (`Card::make(['variant' => 'elevated'])->slot(...)`).
 
 ### Ui HTMX v4 Helper Methods (all chainable fluent API)
 
-These map directly to HTMX v4 attributes. Call them on any Ui instance (or sub-element bag via `$ui->for('link')`):
+These map directly to HTMX v4 attributes. Call them on any Ui instance:
 
 ```php
 $btn = Button::make(['label' => 'Save'])
 	// === v4 FORM SYNTAX (preferred) ===
 	->action('/submit')                    // hx-action="/submit"
 	->method('post')                       // hx-method="post"
-	->hxAction('/submit', 'POST')          // shorthand: hx-action="/submit" hx-method="POST"
 	->query('/search')                     // hx-query="/search"
 	->config(['history' => false])         // hx-config='{"history":false}'
 	->config('{"indicator":"#spinner"}')   // hx-config also accepts JSON string
@@ -374,9 +374,11 @@ $r->sourceTag();                   // string|null — tag name portion of HX-Sou
 $r->triggerName();                 // string|null — HX-Source id portion; falls back to POST['__htmx_action'] for compat
 
 // Other request context
+$r->method();                      // string — effective HTTP verb (downgraded to GET in unauthorized demo mode)
+$r->rawMethod();                   // string — raw HTTP verb from $_SERVER['REQUEST_METHOD']
 $r->prompt();                      // string|null — user response to hx-prompt
 $r->currentUrl();                  // string|null — HX-Current-URL value
-$r->historyRestore();              // bool — is this a history restore request?
+$r->isHistoryRestore();            // bool — is HX-History-Restore-Request: true present?
 
 // All HX-* headers
 $r->headers();                     // array<string, string> — all HX-* headers keyed without the HX- prefix
@@ -432,12 +434,12 @@ $resp->applyHeaders();
 
 ### Fragment API (`$this->htmx->fragment`) — HTMX v4
 
-Manages out-of-band and `<hx-partial>` secondary DOM updates.
+Manages `<hx-partial>` secondary DOM updates and confined template fragment rendering.
 
 ```php
 $frag = $this->htmx->fragment;
 
-// v4 PREFERRED: adds an <hx-partial> element (HTMX 4 partial elements)
+// Queue an <hx-partial> element (HTMX 4 partial elements; swap validated via isValidSwapStyle())
 $frag->addPartial(
     target: '#toast-container',             // hx-target="..." attribute on <hx-partial>
     html:   '<div class="toast">Saved!</div>',
@@ -445,16 +447,12 @@ $frag->addPartial(
     select: null,                           // optional hx-select within partial
 );
 
-// Legacy: adds element with hx-swap-oob attribute (still works in v4)
-$frag->addOobSwap('#header-counter', "<span id='header-counter'>5</span>");
-$frag->addOobSwap('#header-counter', "<span id='header-counter'>5</span>", 'innerHTML');
+// Render a confined PHP partial inside site/templates/ via ConfinedViewRenderer
+$html = $frag->renderFile('partials/toast.php', ['message' => 'Saved!']);
 
-// Out-of-band hyperscript blocks (for _hyperscript users)
-$frag->addHyperscript('document.body.classList.add("success")');
-
-// Combines main response HTML + all OOB swaps + all <hx-partial> elements
+// Combines main response HTML + all queued <hx-partial> elements
 // The module calls this internally; you rarely need it directly.
-$frag->getOobSwaps('<!-- main response -->');
+$frag->renderPartials('<!-- main response -->');
 ```
 
 ### Valid Swap Styles (HTMX v4) — used in `hx-swap`, `reswap()`, `addPartial(swap: ...)`, etc.
@@ -474,9 +472,9 @@ Always use the ProcessWire Console to scaffold new UI elements or Components and
 - `php vendor/bin/wire make:htmx:ui {Name} [--dir={CustomRelativePath}]`
 - `php vendor/bin/wire htmx:cache:clear [--stats] [--prune] [--days=7] [--class={ShortOrFqcn}] [--json]`
 
-## 6. Debugging (TracyDebugger)
+## 6. Debugging (Tracy Bar)
 
-When `config->debug` is enabled and the **TracyDebugger** module is installed, Htmx can expose an HTMX panel in the Tracy bar and emit debug response headers for HTMX requests (controlled by the `tracySupport` module config option, default: enabled). This must never be relied on for production logic.
+When `config->debug` is enabled and `\Tracy\Debugger` is active, Htmx can expose an HTMX panel in the Tracy bar and emit debug response headers for HTMX requests (controlled by the `tracySupport` module config option, default: enabled). This must never be relied on for production logic.
 
 Key details:
 
@@ -501,3 +499,5 @@ Key details:
 - 🚫 Solving state synchronization in browser memory when the module already provides signed server-state hydration.
 - 🚫 Using `HX-Trigger-After-Swap` / `HX-Trigger-After-Settle` headers directly — use `triggerAfterSwap()` / `triggerAfterSettle()` which merge into a single HX-Trigger header decoded by `pw-htmx-runtime.js`.
 - 🚫 Using `HX-Trigger-Name` (removed in v4) — use `rawSource()` / `sourceTag()` from HX-Source.
+- 🚫 Calling removed v2/alias methods (`hxAction`, `hxMethod`, `hxTarget`, `hxSwap`, `addOobSwap`, `addHyperscript`, `getOobSwaps`, `historyRestore`, `Request::source()`, `Htmx::renderScripts()`).
+- 🚫 Setting raw `on*` or `(data-)hx-on*` inline event attributes — `AttributeBag` strips them for XSS defense; use `hyperscript()` or external event listeners.
