@@ -40,6 +40,41 @@
     return null;
   }
 
+  function redactHeaders(rawHeaders) {
+    if (!rawHeaders) {
+      return null;
+    }
+    try {
+      var plain = rawHeaders.entries ? Object.fromEntries(rawHeaders.entries()) : rawHeaders;
+      if (!plain || typeof plain !== 'object') {
+        return null;
+      }
+      var csrfName = (typeof window !== 'undefined' && window.__pwHtmxCsrf && typeof window.__pwHtmxCsrf.name === 'string')
+        ? ('x-' + window.__pwHtmxCsrf.name.toLowerCase())
+        : '';
+      var out = {};
+      Object.keys(plain).forEach(function (k) {
+        var lower = String(k).toLowerCase();
+        if (
+          lower === 'cookie'
+          || lower === 'authorization'
+          || lower === 'proxy-authorization'
+          || lower === 'x-csrf-token'
+          || lower === 'x-xsrf-token'
+          || (csrfName !== '' && lower === csrfName)
+          || lower.indexOf('x-token') === 0
+        ) {
+          out[k] = '[REDACTED]';
+        } else {
+          out[k] = plain[k];
+        }
+      });
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function log(eventName, evt) {
     if (!enabled()) {
       return;
@@ -56,7 +91,7 @@
         request: {
           method: request.method || null,
           url: safeUrl(ctx, request),
-          headers: request.headers ? (request.headers.entries ? Object.fromEntries(request.headers.entries()) : request.headers) : null
+          headers: redactHeaders(request.headers)
         },
         responseStatus: safeStatus(ctx)
       };

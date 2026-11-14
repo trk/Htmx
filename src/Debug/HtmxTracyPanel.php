@@ -7,26 +7,26 @@ namespace Totoglu\Htmx\Debug;
 /**
  * Tracy bar panel for HTMX v4 request and HtmxCache compilation metrics.
  *
- * Loaded only when TracyDebugger is installed and ProcessWire debug mode is enabled.
+ * Loaded only when Tracy is enabled and ProcessWire debug mode is active.
  */
 final class HtmxTracyPanel implements \Tracy\IBarPanel
 {
-	/** @var callable():array<string,mixed> */
-	private $provider;
+	/** @var \Closure():array<string,mixed> */
+	private readonly \Closure $provider;
 
 	/**
 	 * @param callable():array<string,mixed> $provider
 	 */
 	public function __construct(callable $provider)
 	{
-		$this->provider = $provider;
+		$this->provider = $provider instanceof \Closure ? $provider : \Closure::fromCallable($provider);
 	}
 
 	public function getTab(): string
 	{
 		$badge = '';
 		try {
-			$data = (array) call_user_func($this->provider);
+			$data = (array) ($this->provider)();
 			$cacheStats = is_array($data['cacheStats'] ?? null) ? $data['cacheStats'] : null;
 			if ($cacheStats !== null && is_array($cacheStats['metrics'] ?? null)) {
 				$m = $cacheStats['metrics'];
@@ -46,7 +46,7 @@ final class HtmxTracyPanel implements \Tracy\IBarPanel
 	{
 		$data = [];
 		try {
-			$data = (array) call_user_func($this->provider);
+			$data = (array) ($this->provider)();
 		} catch (\Throwable $e) {
 			$data = ['error' => $e->getMessage()];
 		}
@@ -57,7 +57,7 @@ final class HtmxTracyPanel implements \Tracy\IBarPanel
 		$rows = '';
 		foreach ($data as $k => $v) {
 			if (is_array($v) || is_object($v)) {
-				$v = json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+				$v = json_encode($v, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 			}
 			$rows .= sprintf(
 				'<tr><th style="text-align:left; padding:2px 8px; white-space:nowrap;">%s</th><td style="padding:2px 8px;">%s</td></tr>',

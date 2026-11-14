@@ -91,6 +91,82 @@
     dispatchAfter('htmx:after:settle', eventMap, true);
   });
 
+  var BLOCKED_CONFIG_KEYS = {
+    __proto__: true,
+    constructor: true,
+    prototype: true,
+    csrf: true,
+    urls: true,
+    admin: true,
+    pwHtmxConfigToken: true
+  };
+
+  function isSafeConfigKey(key) {
+    return typeof key === 'string' && key !== '' && !Object.prototype.hasOwnProperty.call(BLOCKED_CONFIG_KEYS, key);
+  }
+
+  function resolveExpectedConfigToken() {
+    if (window.__pwHtmxCsrf && typeof window.__pwHtmxCsrf.configToken === 'string' && window.__pwHtmxCsrf.configToken !== '') {
+      return window.__pwHtmxCsrf.configToken;
+    }
+    if (
+      window.ProcessWire
+      && window.ProcessWire.config
+      && typeof window.ProcessWire.config.pwHtmxConfigToken === 'string'
+      && window.ProcessWire.config.pwHtmxConfigToken !== ''
+    ) {
+      return window.ProcessWire.config.pwHtmxConfigToken;
+    }
+    return null;
+  }
+
+  function hasValidConfigToken(node) {
+    var expected = resolveExpectedConfigToken();
+    if (!expected) {
+      return false;
+    }
+    var actual = (node && node.getAttribute && node.getAttribute('data-pw-htmx-token')) || '';
+    return actual !== '' && actual === expected;
+  }
+
+  function isSafeAssetUrl(url) {
+    if (typeof url !== 'string') {
+      return false;
+    }
+    var trimmed = url.trim();
+    if (!trimmed || trimmed.indexOf('\\') !== -1 || trimmed.indexOf('//') === 0) {
+      return false;
+    }
+    var normalized = trimmed.replace(/[\u0000-\u0020\u007F]+/g, '').toLowerCase();
+    if (
+      normalized.indexOf('javascript:') === 0
+      || normalized.indexOf('js:') === 0
+      || normalized.indexOf('data:') === 0
+      || normalized.indexOf('vbscript:') === 0
+      || normalized.indexOf('blob:') === 0
+      || normalized.indexOf('file:') === 0
+    ) {
+      return false;
+    }
+    try {
+      if (typeof window !== 'undefined' && window.location && window.location.href) {
+        var resolved = new URL(trimmed, window.location.href);
+        if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+          return false;
+        }
+        if (window.location.origin && window.location.origin !== 'null' && resolved.origin !== window.location.origin) {
+          return false;
+        }
+        if (window.location.protocol === 'https:' && resolved.protocol !== 'https:') {
+          return false;
+        }
+      }
+    } catch (e) {
+      return false;
+    }
+    return true;
+  }
+
   function stripAssetQuery(url) {
     return String(url || '').split('?')[0].split('#')[0];
   }
@@ -174,6 +250,12 @@
 
     for (var i = 0; i < configNodes.length; i++) {
       var node = configNodes[i];
+      if (!hasValidConfigToken(node)) {
+        if (node.parentNode) {
+          node.parentNode.removeChild(node);
+        }
+        continue;
+      }
       foundConfig = true;
       try {
         var raw = node.textContent || node.innerText || '{}';
@@ -183,13 +265,15 @@
           window.ProcessWire = window.ProcessWire || {};
           window.ProcessWire.config = window.ProcessWire.config || {};
           Object.keys(payload.jsConfig).forEach(function (key) {
-            window.ProcessWire.config[key] = payload.jsConfig[key];
+            if (isSafeConfigKey(key) && Object.prototype.hasOwnProperty.call(payload.jsConfig, key)) {
+              window.ProcessWire.config[key] = payload.jsConfig[key];
+            }
           });
         }
 
         if (payload && Array.isArray(payload.styles)) {
           payload.styles.forEach(function (href) {
-            if (hasStylesheetLoaded(href)) {
+            if (!isSafeAssetUrl(href) || hasStylesheetLoaded(href)) {
               return;
             }
             var link = document.createElement('link');
@@ -201,7 +285,7 @@
 
         if (payload && Array.isArray(payload.scripts)) {
           payload.scripts.forEach(function (src) {
-            if (hasScriptLoaded(src)) {
+            if (!isSafeAssetUrl(src) || hasScriptLoaded(src)) {
               return;
             }
             pendingScripts++;

@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Totoglu\Htmx\Bag;
 
+use ProcessWire\Config;
+
+use function ProcessWire\wire;
+
 /**
  * AttributeBag
  *
@@ -129,16 +133,142 @@ class AttributeBag extends ParameterBag
 		return $this;
 	}
 
+	/** @var array<string, true> Attributes serialized as JSON requiring strict entity encoding */
+	private array $jsonKeys = [];
+
 	/**
-	 * Override set to support automated JSON conversion, returning self for fluid interface.
+	 * Normalize and validate an HTML attribute name, rejecting unsafe characters,
+	 * raw `on*` DOM event handlers, and `(data-)hx-on*` inline script handlers.
+	 */
+	public static function normalizeAttributeName(string $name): ?string
+	{
+		$trimmed = trim($name);
+		if ($trimmed === '' || preg_match('/[\x00-\x20\x7F"\'`=\\/<>]/', $trimmed) === 1) {
+			return null;
+		}
+		if (preg_match('/^on[a-z]/i', $trimmed) === 1 || preg_match('/^(?:data-)?hx-on(?:$|:|-)/i', $trimmed) === 1) {
+			return null;
+		}
+
+		return $trimmed;
+	}
+
+	/**
+	 * Override set to support automated JSON conversion and HTMX `hx-*` / `data-hx-*` attribute sanitization.
 	 */
 	public function set(string $key, mixed $value, bool $asJson = false): self
 	{
-		if ($asJson && (is_array($value) || is_object($value))) {
-			$value = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		$normalizedKey = self::normalizeAttributeName($key);
+		if ($normalizedKey === null) {
+			return $this;
 		}
-		parent::set($key, $value);
+
+		$lowerKey = strtolower($normalizedKey);
+		if (($asJson || $lowerKey === 'hx-config' || $lowerKey === 'data-hx-config') && (is_array($value) || is_object($value))) {
+			if ($lowerKey === 'hx-config' || $lowerKey === 'data-hx-config') {
+				$value = self::sanitizeHxConfigArray((array) $value);
+			}
+			$encoded = json_encode(
+				$value,
+				JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE
+			);
+			$value = is_string($encoded) ? $encoded : '{}';
+			$this->jsonKeys[$normalizedKey] = true;
+		} else {
+			unset($this->jsonKeys[$normalizedKey]);
+			if (is_string($value)) {
+				$value = self::sanitizeHxAttributeValue($normalizedKey, $value);
+			}
+		}
+		parent::set($normalizedKey, $value);
 		return $this;
+	}
+
+	/**
+	 * Sanitize an `hx-config` / `data-hx-config` options map against `action:js:...` or cross-origin `credentials:include`.
+	 *
+	 * @param array<mixed, mixed> $configMap
+	 * @return array<string, mixed>
+	 */
+	private static function sanitizeHxConfigArray(array $configMap): array
+	{
+		$safe = [];
+		foreach ($configMap as $cfgKey => $cfgVal) {
+			if (!is_string($cfgKey) || $cfgKey === '' || in_array($cfgKey, ['__proto__', 'constructor', 'prototype'], true)) {
+				continue;
+			}
+			if (strcasecmp($cfgKey, 'action') === 0) {
+				if (is_string($cfgVal)) {
+					$safe['action'] = self::sanitizeHxUrl($cfgVal);
+				}
+				continue;
+			}
+			if (strcasecmp($cfgKey, 'credentials') === 0) {
+				$cred = is_string($cfgVal) ? strtolower(trim($cfgVal)) : '';
+				$safe['credentials'] = in_array($cred, ['same-origin', 'omit'], true) ? $cred : 'same-origin';
+				continue;
+			}
+			$safe[$cfgKey] = is_array($cfgVal) ? self::sanitizeHxConfigArray($cfgVal) : $cfgVal;
+		}
+
+		return $safe;
+	}
+
+	/**
+	 * Sanitize `hx-*` and `data-hx-*` string attribute values against HTMX v4 `js:` / `javascript:` evaluation prefixes.
+	 */
+	private static function sanitizeHxAttributeValue(string $attrName, string $value): string
+	{
+		$lower = strtolower(trim($attrName));
+		$hxPart = null;
+		if (str_starts_with($lower, 'hx-')) {
+			$hxPart = substr($lower, 3);
+		} elseif (str_starts_with($lower, 'data-hx-')) {
+			$hxPart = substr($lower, 8);
+		}
+		if ($hxPart === null || $hxPart === '') {
+			return $value;
+		}
+
+		$baseKey = (string) strtok($hxPart, ':');
+		if (in_array($baseKey, ['get', 'post', 'put', 'patch', 'delete', 'action', 'query', 'push-url', 'replace-url'], true)) {
+			if (($baseKey === 'push-url' || $baseKey === 'replace-url') && in_array(strtolower(trim($value)), ['true', 'false'], true)) {
+				return strtolower(trim($value));
+			}
+			return self::sanitizeHxUrl($value);
+		}
+
+		if ($baseKey === 'confirm') {
+			return self::sanitizeConfirmText($value);
+		}
+
+		if ($baseKey === 'vals' || $baseKey === 'headers') {
+			if (preg_match('/^[\x00-\x20\x7F]*(?:js|javascript):/i', $value) === 1) {
+				return '{}';
+			}
+		}
+
+		if ($baseKey === 'config') {
+			$trimmed = trim($value);
+			if ($trimmed !== '' && str_starts_with($trimmed, '{')) {
+				$decoded = json_decode($trimmed, true, 16);
+				if (is_array($decoded)) {
+					$sanitized = self::sanitizeHxConfigArray($decoded);
+					$reencoded = json_encode($sanitized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+					return is_string($reencoded) ? $reencoded : '{}';
+				}
+			}
+			$compact = preg_replace('/[\x00-\x20\x7F]+/', '', $value) ?? '';
+			if (
+				preg_match('/(?:js|javascript|data|vbscript|blob|file):/i', $compact) === 1
+				|| preg_match('/credentials\s*:\s*[\'"]?include/i', $value) === 1
+			) {
+				return '{}';
+			}
+		}
+
+		return $value;
 	}
 
 	/**
@@ -166,38 +296,101 @@ class AttributeBag extends ParameterBag
 	}
 
 	/**
-	 * Set `hx-action` and `hx-method` on this bag.
+	 * Harden HTMX URL attributes against executable schemes, protocol-relative URLs,
+	 * embedded backslashes, entity-encoded control characters, and cross-origin `http(s)://` URLs.
 	 */
-	public function hxAction(string $url, string $httpMethod = 'GET'): self
+	public static function sanitizeHxUrl(string $url): string
 	{
-		return $this->set('hx-action', $url)
-			->set('hx-method', strtoupper(trim($httpMethod)));
-	}
+		$trimmed = trim($url);
+		if ($trimmed === '') {
+			return '/';
+		}
 
-	public function hxTarget(string $selector): self
-	{
-		return $this->set('hx-target', $selector);
-	}
+		$decoded = html_entity_decode($trimmed, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+		if (
+			$decoded === ''
+			|| str_contains($trimmed, '\\')
+			|| str_contains($decoded, '\\')
+			|| preg_match('/[\x00-\x20\x7F]/', $trimmed) === 1
+			|| preg_match('/[\x00-\x20\x7F]/', $decoded) === 1
+			|| str_starts_with($trimmed, '//')
+			|| str_starts_with($decoded, '//')
+		) {
+			return '/';
+		}
 
-	public function hxSwap(string $style): self
-	{
-		return $this->set('hx-swap', $style);
-	}
+		if (preg_match('/^(?:js|javascript|data|vbscript|blob|file):/i', $decoded) === 1) {
+			return '/';
+		}
 
-	public function hxInclude(string $selector): self
-	{
-		return $this->set('hx-include', $selector);
+		if (preg_match('#^https?://#i', $decoded) !== 1) {
+			if (str_contains((string) strtok($decoded, '/?#'), ':')) {
+				return '/';
+			}
+
+			return $decoded;
+		}
+
+		$parts = parse_url($decoded);
+		if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
+			return '/';
+		}
+
+		$host = strtolower(trim((string) ($parts['host'] ?? '')));
+		if ($host === '') {
+			return '/';
+		}
+		if (str_contains($host, ':') && !str_starts_with($host, '[')) {
+			$host = '[' . $host . ']';
+		}
+		$port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+		$hostWithPort = $host . $port;
+
+		$config = wire()?->config;
+		if (!$config instanceof Config) {
+			return '/';
+		}
+
+		$scheme = strtolower((string) ($parts['scheme'] ?? ''));
+		if ((bool) $config->https && $scheme !== 'https') {
+			return '/';
+		}
+
+		$allowedHosts = [];
+		$candidates = [$config->httpHost];
+		if (is_iterable($config->httpHosts)) {
+			foreach ($config->httpHosts as $configuredHost) {
+				$candidates[] = $configuredHost;
+			}
+		}
+		foreach ($candidates as $candidate) {
+			$normalizedHost = strtolower(trim((string) $candidate));
+			if ($normalizedHost !== '') {
+				$allowedHosts[] = $normalizedHost;
+			}
+		}
+
+		if ($allowedHosts === []) {
+			return '/';
+		}
+
+		if (!in_array($hostWithPort, $allowedHosts, true) && !($port === '' && in_array($host, $allowedHosts, true))) {
+			return '/';
+		}
+
+		return $decoded;
 	}
 
 	/**
-	 * @param string|array<string, mixed> $values
+	 * Neutralize HTMX v4 `js:` / `javascript:` AsyncFunction evaluation prefixes in confirmation prompts.
 	 */
-	public function hxVals(string|array $values): self
+	public static function sanitizeConfirmText(string $message): string
 	{
-		if (is_array($values)) {
-			return $this->set('hx-vals', $values, true);
+		while (preg_match('/^[\x00-\x20\x7F]*(?:js|javascript):/i', $message) === 1) {
+			$message = (string) preg_replace('/^[\x00-\x20\x7F]*(?:js|javascript):/i', '', $message);
 		}
-		return $this->set('hx-vals', $values);
+
+		return $message;
 	}
 
 	/**
@@ -276,16 +469,21 @@ class AttributeBag extends ParameterBag
 	{
 		$html = [];
 		foreach ($this->all() as $key => $value) {
-			if ($excludeClass && (string) $key === 'class') {
+			$attrName = self::normalizeAttributeName((string) $key);
+			if ($attrName === null) {
+				continue;
+			}
+			if ($excludeClass && $attrName === 'class') {
 				continue;
 			}
 			if ($value === true) {
-				$html[] = htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8', false);
+				$html[] = htmlspecialchars($attrName, ENT_QUOTES, 'UTF-8', false);
 			} elseif ($value !== null && $value !== false) {
+				$doubleEncode = isset($this->jsonKeys[$attrName]);
 				$html[] = sprintf(
 					'%s="%s"',
-					htmlspecialchars((string) $key, ENT_QUOTES, 'UTF-8', false),
-					htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8', false)
+					htmlspecialchars($attrName, ENT_QUOTES, 'UTF-8', false),
+					htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8', $doubleEncode)
 				);
 			}
 		}

@@ -59,11 +59,24 @@ class Response extends WireData
 	 */
 	private function emitHeader(string $name, string $value): void
 	{
-		$clean = $this->safeHeaderValue($value);
-		$this->headers[$name] = $clean;
-		if (!headers_sent()) {
-			header("{$name}: {$clean}");
+		$safeName = preg_replace('/[^!#$%&\'*+.^_`|~0-9A-Za-z-]/', '', $name) ?? '';
+		if ($safeName === '') {
+			return;
 		}
+		$clean = $this->safeHeaderValue($value);
+		$this->headers[$safeName] = $clean;
+		if (!headers_sent()) {
+			header("{$safeName}: {$clean}");
+		}
+	}
+
+	/**
+	 * Set a custom outgoing HTTP response header with RFC 9110 token & CRLF sanitization.
+	 */
+	public function setHeader(string $name, string $value): self
+	{
+		$this->emitHeader($name, $value);
+		return $this;
 	}
 
 	/**
@@ -123,12 +136,140 @@ class Response extends WireData
 		return $this;
 	}
 
+	/** @var list<string> Allowed option keys in an `HX-Location` specification */
+	private const ALLOWED_LOCATION_OPTIONS = [
+		'source',
+		'event',
+		'handler',
+		'target',
+		'swap',
+		'values',
+		'headers',
+		'select',
+		'push',
+		'replace',
+		'confirm',
+	];
+
+	/**
+	 * Sanitize a navigation URL to block dangerous pseudo-schemes (`js:`, `javascript:`, `data:`, `vbscript:`)
+	 * and control characters before emitting HTMX navigation headers.
+	 */
+	public function sanitizeNavigationUrl(string $url): string
+	{
+		$clean = trim($this->safeHeaderValue($url));
+		if ($clean === '' || str_contains($clean, '\\') || str_starts_with($clean, '//')) {
+			return '/';
+		}
+
+		$normalized = preg_replace('/[\x00-\x20\x7F]+/', '', $clean) ?? '';
+		if (preg_match('/^(?:js|javascript|data|vbscript|blob|file):/i', $normalized) === 1) {
+			return '/';
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Sanitize a URL passed to `HX-Push-Url` or `HX-Replace-Url`, enforcing same-origin
+	 * so `history.pushState` / `history.replaceState` cannot throw `SecurityError` on cross-origin URLs.
+	 */
+	private function sanitizeHistoryUrl(string $url): string
+	{
+		$clean = $this->sanitizeNavigationUrl($url);
+		if ($clean === '/' || str_starts_with($clean, '//')) {
+			return '/';
+		}
+
+		if (preg_match('#^https?://#i', $clean) !== 1) {
+			return str_contains((string) strtok($clean, '/?#'), ':') ? '/' : $clean;
+		}
+
+		$parts = parse_url($clean);
+		if (!is_array($parts) || isset($parts['user']) || isset($parts['pass'])) {
+			return '/';
+		}
+
+		$host = strtolower(trim((string) ($parts['host'] ?? '')));
+		if ($host === '') {
+			return '/';
+		}
+
+		if (str_contains($host, ':') && !str_starts_with($host, '[')) {
+			$host = '[' . $host . ']';
+		}
+		$port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+		$hostWithPort = $host . $port;
+
+		$config = $this->wire()?->config;
+		if ($config === null) {
+			return '/';
+		}
+
+		$scheme = strtolower((string) ($parts['scheme'] ?? ''));
+		if ((bool) $config->https && $scheme !== 'https') {
+			return '/';
+		}
+
+		$allowedHosts = [];
+		$candidates = [$config->httpHost];
+		if (is_iterable($config->httpHosts)) {
+			foreach ($config->httpHosts as $configuredHost) {
+				$candidates[] = $configuredHost;
+			}
+		}
+
+		foreach ($candidates as $candidate) {
+			$normalizedHost = strtolower(trim((string) $candidate));
+			if ($normalizedHost !== '') {
+				$allowedHosts[] = $normalizedHost;
+			}
+		}
+
+		if ($allowedHosts === []) {
+			return '/';
+		}
+
+		return (in_array($hostWithPort, $allowedHosts, true) || ($port === '' && in_array($host, $allowedHosts, true)))
+			? $clean
+			: '/';
+	}
+
+	/**
+	 * Sanitize an `HX-Location` options map against HCON / `js:` / unrecognised keys.
+	 *
+	 * @param array<string, mixed> $options
+	 * @return array<string, mixed>
+	 */
+	private function sanitizeLocationOptions(array $options): array
+	{
+		$safe = [];
+		foreach (self::ALLOWED_LOCATION_OPTIONS as $allowedKey) {
+			if (!array_key_exists($allowedKey, $options)) {
+				continue;
+			}
+			$val = $options[$allowedKey];
+			if ($allowedKey === 'confirm' && is_string($val)) {
+				while (preg_match('/^[\x00-\x20\x7F]*(?:js|javascript):/i', $val) === 1) {
+					$val = (string) preg_replace('/^[\x00-\x20\x7F]*(?:js|javascript):/i', '', $val);
+				}
+			} elseif (($allowedKey === 'push' || $allowedKey === 'replace') && is_string($val)) {
+				$val = $this->sanitizeHistoryUrl($val);
+			}
+			$safe[$allowedKey] = $val;
+		}
+
+		return $safe;
+	}
+
 	/**
 	 * Send a client-side redirect via HX-Redirect (navigates the whole page).
+	 * Enforces same-origin host validation by default unless `$allowExternal === true`.
 	 */
-	public function redirect(string $url): self
+	public function redirect(string $url, bool $allowExternal = false): self
 	{
-		$this->emitHeader('HX-Redirect', $url);
+		$safeUrl = $allowExternal ? $this->sanitizeNavigationUrl($url) : $this->sanitizeHistoryUrl($url);
+		$this->emitHeader('HX-Redirect', $safeUrl);
 		return $this;
 	}
 
@@ -148,7 +289,7 @@ class Response extends WireData
 	 */
 	public function pushUrl(string|bool $url = true): self
 	{
-		$val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+		$val = is_bool($url) ? ($url ? 'true' : 'false') : $this->sanitizeHistoryUrl($url);
 		$this->emitHeader('HX-Push-Url', $val);
 		return $this;
 	}
@@ -158,7 +299,7 @@ class Response extends WireData
 	 */
 	public function replaceUrl(string|bool $url = true): self
 	{
-		$val = is_bool($url) ? ($url ? 'true' : 'false') : $url;
+		$val = is_bool($url) ? ($url ? 'true' : 'false') : $this->sanitizeHistoryUrl($url);
 		$this->emitHeader('HX-Replace-Url', $val);
 		return $this;
 	}
@@ -173,14 +314,36 @@ class Response extends WireData
 	public function location(string|array $url, array $options = []): self
 	{
 		if (is_array($url)) {
-			$encoded = json_encode($url, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-			$val = is_string($encoded) ? $encoded : '{}';
+			$safePath = isset($url['path']) && is_string($url['path'])
+				? $this->sanitizeHistoryUrl($url['path'])
+				: '/';
+			if (str_starts_with($safePath, '{') || (preg_match('#^https?://#i', $safePath) !== 1 && str_contains((string) strtok($safePath, '/?#'), ':'))) {
+				$safePath = '/';
+			}
+			$safeOpts = $this->sanitizeLocationOptions($url);
+			$payload = array_merge(['path' => $safePath], $safeOpts);
+			$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+			$val = is_string($encoded) ? $encoded : '{"path":"/"}';
 		} elseif ($options !== []) {
-			$payload = array_merge(['path' => $url], $options);
-			$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-			$val = is_string($encoded) ? $encoded : $url;
+			$safePath = $this->sanitizeHistoryUrl($url);
+			if (str_starts_with($safePath, '{') || (preg_match('#^https?://#i', $safePath) !== 1 && str_contains((string) strtok($safePath, '/?#'), ':'))) {
+				$safePath = '/';
+			}
+			$safeOpts = $this->sanitizeLocationOptions($options);
+			$payload = array_merge(['path' => $safePath], $safeOpts);
+			$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+			$val = is_string($encoded) ? $encoded : $safePath;
 		} else {
-			$val = $url;
+			$safePath = $this->sanitizeHistoryUrl($url);
+			if (str_starts_with($safePath, '{') || (preg_match('#^https?://#i', $safePath) !== 1 && str_contains((string) strtok($safePath, '/?#'), ':'))) {
+				$safePath = '/';
+			}
+			if (preg_match('/[\s,{}"\']/', $safePath) === 1) {
+				$encoded = json_encode(['path' => $safePath], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+				$val = is_string($encoded) ? $encoded : '/';
+			} else {
+				$val = $safePath;
+			}
 		}
 
 		$this->emitHeader('HX-Location', $val);
@@ -330,7 +493,7 @@ class Response extends WireData
 			return;
 		}
 
-		$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+		$encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 		if ($encoded === false) {
 			$encoded = '{}';
 		}
@@ -385,6 +548,57 @@ class Response extends WireData
 	public function noSwap(): self
 	{
 		return $this->reswap('none');
+	}
+
+	/**
+	 * Append one or more header names to the outgoing `Vary` HTTP response header
+	 * so intermediary/browser caches distinguish HTMX partial and boosted responses from full HTML pages.
+	 */
+	public function vary(string $header = 'HX-Request, HX-Boosted'): self
+	{
+		$existing = $this->getHeader('Vary') ?? '';
+		if (trim($existing) === '*') {
+			return $this;
+		}
+
+		$sources = [];
+		if ($existing !== '') {
+			$sources[] = $existing;
+		}
+		if (PHP_SAPI !== 'cli' && function_exists('headers_list')) {
+			foreach (headers_list() as $sentHeader) {
+				if (stripos($sentHeader, 'Vary:') === 0) {
+					$sources[] = substr($sentHeader, 5);
+				}
+			}
+		}
+		$sources[] = $header;
+
+		$tokens = [];
+		foreach ($sources as $source) {
+			foreach (explode(',', $source) as $part) {
+				$trimmed = trim($this->safeHeaderValue($part));
+				$cleanToken = (string) preg_replace('/[^!#$%&\'*+.^_`|~0-9A-Za-z-]/', '', $trimmed);
+				if ($cleanToken === '*') {
+					$this->emitHeader('Vary', '*');
+
+					return $this;
+				}
+				if ($cleanToken === '') {
+					continue;
+				}
+				$lower = strtolower($cleanToken);
+				if (!isset($tokens[$lower])) {
+					$tokens[$lower] = $cleanToken;
+				}
+			}
+		}
+
+		if ($tokens !== []) {
+			$this->emitHeader('Vary', implode(', ', array_values($tokens)));
+		}
+
+		return $this;
 	}
 
 	/**
