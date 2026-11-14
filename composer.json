@@ -1,6 +1,5 @@
 {
   "name": "trk/processwire-htmx",
-  "version": "2.1.4",
   "description": "State-aware HTMX v4 module offering a native Request/Response API and server-driven components for ProcessWire.",
   "type": "pw-module",
   "keywords": [
