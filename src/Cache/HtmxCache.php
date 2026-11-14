@@ -140,23 +140,41 @@ class HtmxCache extends WireData
 		return $this->getBasePath() . 'components/';
 	}
 
-	public function getUiClassDir(string $shortClass): string
+	public function getUiClassDir(string $classOrShort, string $nsTag = ''): string
 	{
-		$safe = $this->sanitizeIdentifier($shortClass);
-		return $this->getUiBaseDir() . $safe . '/';
+		return $this->getUiBaseDir() . $this->resolveClassFolderName($classOrShort, $nsTag) . '/';
 	}
 
-	public function getComponentClassDir(string $shortClass): string
+	public function getComponentClassDir(string $classOrShort, string $nsTag = ''): string
 	{
-		$safe = $this->sanitizeIdentifier($shortClass);
-		return $this->getComponentBaseDir() . $safe . '/';
+		return $this->getComponentBaseDir() . $this->resolveClassFolderName($classOrShort, $nsTag) . '/';
+	}
+
+	private function resolveClassFolderName(string $classOrShort, string $nsTag = ''): string
+	{
+		if (str_contains($classOrShort, '\\')) {
+			$normalized = ltrim($classOrShort, '\\');
+			$short = basename(str_replace('\\', '/', $normalized));
+			if ($nsTag === '') {
+				$nsTag = 'ns' . substr(hash('xxh128', $normalized), 0, 8);
+			}
+		} else {
+			$short = $classOrShort;
+			if ($nsTag === '' && class_exists($classOrShort)) {
+				$normalized = ltrim($classOrShort, '\\');
+				$nsTag = 'ns' . substr(hash('xxh128', $normalized), 0, 8);
+			}
+		}
+
+		$safe = $this->sanitizeIdentifier($short);
+		return $nsTag !== '' ? ($safe . '_' . $this->sanitizeIdentifier($nsTag)) : $safe;
 	}
 
 	/**
-	 * Resolve and cache the short class name, source file path, and current filemtime for a class.
+	 * Resolve and cache the short class name, FQCN namespace tag, source file path, and current filemtime for a class.
 	 *
 	 * @param class-string $class
-	 * @return array{short: string, file: string, mtime: int}
+	 * @return array{short: string, nsTag: string, file: string, mtime: int}
 	 */
 	public function resolveSourceMeta(string $class): array
 	{
@@ -185,9 +203,11 @@ class HtmxCache extends WireData
 		$file = (string) ($ref->getFileName() ?: '');
 		$mtime = ($file !== '' && is_file($file)) ? (int) @filemtime($file) : 1;
 		$short = $this->sanitizeIdentifier($ref->getShortName());
+		$nsTag = 'ns' . substr(hash('xxh128', ltrim($class, '\\')), 0, 8);
 
 		$meta = [
 			'short' => $short,
+			'nsTag' => $nsTag,
 			'file' => $file,
 			'mtime' => $mtime,
 		];
@@ -218,7 +238,7 @@ class HtmxCache extends WireData
 	public function getOrCompileUi(string $class, string|array $shapeHash, callable $compiler): callable
 	{
 		if (is_array($shapeHash)) {
-			$shapeHash = hash('xxh128', (string) json_encode($shapeHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+			$shapeHash = hash('xxh128', (string) json_encode($shapeHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
 		}
 		$safeHash = $this->sanitizeHash($shapeHash);
 		$meta = $this->resolveSourceMeta($class);
@@ -229,8 +249,8 @@ class HtmxCache extends WireData
 			return $this->uiClosures[$memKey];
 		}
 
-		$dir = $this->getUiClassDir($meta['short']);
-		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $safeHash . '.php';
+		$dir = $this->getUiClassDir($meta['short'], $meta['nsTag']);
+		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_' . $safeHash . '.php';
 		$filePath = $dir . $filename;
 
 		if ($this->enabled && is_file($filePath)) {
@@ -251,7 +271,7 @@ class HtmxCache extends WireData
 		$fileContents = "<?php\n\ndeclare(strict_types=1);\n\n// HtmxCache UI Shape: {$class} ({$safeHash})\nreturn {$closureCode};\n";
 
 		if ($this->enabled) {
-			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents);
+			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents, $meta['nsTag']);
 			$loaded = $this->includeCacheFile($filePath);
 			if (is_callable($loaded)) {
 				$this->uiClosures[$memKey] = $loaded;
@@ -281,8 +301,8 @@ class HtmxCache extends WireData
 			return $this->memoOutputs[$memKey];
 		}
 
-		$dir = $this->getUiClassDir($meta['short']);
-		$filename = $meta['short'] . '_' . $meta['mtime'] . '_memo_' . $safeHash . '.php';
+		$dir = $this->getUiClassDir($meta['short'], $meta['nsTag']);
+		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_memo_' . $safeHash . '.php';
 		$filePath = $dir . $filename;
 
 		if ($this->enabled && is_file($filePath)) {
@@ -312,12 +332,12 @@ class HtmxCache extends WireData
 		$this->memoOutputs[$memKey] = $html;
 
 		if ($this->enabled && $persistToDisk && $html !== '') {
-			$dir = $this->getUiClassDir($meta['short']);
-			$filename = $meta['short'] . '_' . $meta['mtime'] . '_memo_' . $safeHash . '.php';
+			$dir = $this->getUiClassDir($meta['short'], $meta['nsTag']);
+			$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_memo_' . $safeHash . '.php';
 			$filePath = $dir . $filename;
 			$exported = var_export($html, true);
 			$fileContents = "<?php\n\ndeclare(strict_types=1);\n\n// HtmxCache UI Memo: {$class} ({$safeHash})\nreturn {$exported};\n";
-			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents);
+			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents, $meta['nsTag']);
 		}
 	}
 
@@ -338,13 +358,13 @@ class HtmxCache extends WireData
 			return $this->componentSchemas[$memKey];
 		}
 
-		$dir = $this->getComponentClassDir($meta['short']);
-		$filename = $meta['short'] . '_' . $meta['mtime'] . '_schema.php';
+		$dir = $this->getComponentClassDir($meta['short'], $meta['nsTag']);
+		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_schema.php';
 		$filePath = $dir . $filename;
 
 		if ($this->enabled && is_file($filePath)) {
 			$loaded = $this->includeCacheFile($filePath);
-			if (is_array($loaded)) {
+			if (is_array($loaded) && ($loaded['__schemaVersion'] ?? 0) === 3) {
 				$this->componentSchemas[$memKey] = $loaded;
 				$this->metrics['schemaHits']++;
 				return $loaded;
@@ -358,7 +378,7 @@ class HtmxCache extends WireData
 		if ($this->enabled) {
 			$exported = var_export($schema, true);
 			$fileContents = "<?php\n\ndeclare(strict_types=1);\n\n// HtmxCache Component Schema: {$class}\nreturn {$exported};\n";
-			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents);
+			$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents, $meta['nsTag']);
 		}
 
 		return $schema;
@@ -369,7 +389,7 @@ class HtmxCache extends WireData
 	 *
 	 * @param class-string $class
 	 * @param string|array<string, mixed> $stateHash
-	 * @return array{html: string, assets: array{scripts: list<string>, styles: list<string>, jsConfig: array<string, mixed>, stateTtlHours: int}, scripts: list<string>, styles: list<string>, jsConfig: array<string, mixed>, createdAt: int}|null
+	 * @return array{html: string, assets: array{scripts: list<string>, styles: list<string>, jsConfig: array<string, mixed>, stateTtlHours: int, stateToken: string, idToken: string}, createdAt: int}|null
 	 */
 	public function getComponentRender(string $class, string|array $stateHash, int $ttlSeconds = 3600): ?array
 	{
@@ -379,13 +399,13 @@ class HtmxCache extends WireData
 		}
 
 		if (is_array($stateHash)) {
-			$stateHash = hash('xxh128', (string) json_encode($stateHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+			$stateHash = hash('xxh128', (string) json_encode($stateHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
 		}
 
 		$safeHash = $this->sanitizeHash($stateHash);
 		$meta = $this->resolveSourceMeta($class);
-		$dir = $this->getComponentClassDir($meta['short']);
-		$filename = $meta['short'] . '_' . $meta['mtime'] . '_render_' . $safeHash . '.php';
+		$dir = $this->getComponentClassDir($meta['short'], $meta['nsTag']);
+		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_render_' . $safeHash . '.php';
 		$filePath = $dir . $filename;
 
 		if (!is_file($filePath)) {
@@ -410,6 +430,8 @@ class HtmxCache extends WireData
 		$styles = is_array($loaded['styles'] ?? null) ? array_values($loaded['styles']) : [];
 		$jsConfig = is_array($loaded['jsConfig'] ?? null) ? $loaded['jsConfig'] : [];
 		$stateTtlHours = isset($loaded['stateTtlHours']) && is_int($loaded['stateTtlHours']) ? $loaded['stateTtlHours'] : 24;
+		$stateToken = isset($loaded['stateToken']) && is_string($loaded['stateToken']) ? $loaded['stateToken'] : '';
+		$idToken = isset($loaded['idToken']) && is_string($loaded['idToken']) ? $loaded['idToken'] : '';
 
 		return [
 			'html' => $loaded['html'],
@@ -418,10 +440,9 @@ class HtmxCache extends WireData
 				'styles' => $styles,
 				'jsConfig' => $jsConfig,
 				'stateTtlHours' => $stateTtlHours,
+				'stateToken' => $stateToken,
+				'idToken' => $idToken,
 			],
-			'scripts' => $scripts,
-			'styles' => $styles,
-			'jsConfig' => $jsConfig,
 			'createdAt' => (int) $loaded['createdAt'],
 		];
 	}
@@ -431,42 +452,39 @@ class HtmxCache extends WireData
 	 *
 	 * @param class-string $class
 	 * @param string|array<string, mixed> $stateHash
-	 * @param string|array{html: string, scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>, stateTtlHours?: int} $htmlOrPayload
-	 * @param array{scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>, stateTtlHours?: int} $assets
+	 * @param array{scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>, stateTtlHours?: int, stateToken?: string, idToken?: string} $assets
 	 */
-	public function putComponentRender(string $class, string|array $stateHash, string|array $htmlOrPayload, array $assets = []): void
+	public function putComponentRender(string $class, string|array $stateHash, string $html, array $assets = []): void
 	{
 		if (!$this->enabled) {
 			return;
 		}
 
 		if (is_array($stateHash)) {
-			$stateHash = hash('xxh128', (string) json_encode($stateHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+			$stateHash = hash('xxh128', (string) json_encode($stateHash, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
 		}
-
-		$payload = is_array($htmlOrPayload)
-			? $htmlOrPayload
-			: array_merge($assets, ['html' => $htmlOrPayload]);
 
 		$safeHash = $this->sanitizeHash($stateHash);
 		$meta = $this->resolveSourceMeta($class);
-		$dir = $this->getComponentClassDir($meta['short']);
-		$filename = $meta['short'] . '_' . $meta['mtime'] . '_render_' . $safeHash . '.php';
+		$dir = $this->getComponentClassDir($meta['short'], $meta['nsTag']);
+		$filename = $meta['short'] . '_' . $meta['mtime'] . '_' . $meta['nsTag'] . '_render_' . $safeHash . '.php';
 		$filePath = $dir . $filename;
 
 		$entry = [
-			'html' => (string) ($payload['html'] ?? ''),
-			'scripts' => array_values($payload['scripts'] ?? []),
-			'styles' => array_values($payload['styles'] ?? []),
-			'jsConfig' => $payload['jsConfig'] ?? [],
-			'stateTtlHours' => (int) ($payload['stateTtlHours'] ?? 24),
+			'html' => $html,
+			'scripts' => array_values($assets['scripts'] ?? []),
+			'styles' => array_values($assets['styles'] ?? []),
+			'jsConfig' => $assets['jsConfig'] ?? [],
+			'stateTtlHours' => (int) ($assets['stateTtlHours'] ?? 24),
+			'stateToken' => isset($assets['stateToken']) && is_string($assets['stateToken']) ? $assets['stateToken'] : '',
+			'idToken' => isset($assets['idToken']) && is_string($assets['idToken']) ? $assets['idToken'] : '',
 			'createdAt' => time(),
 		];
 
 		$exported = var_export($entry, true);
 		$fileContents = "<?php\n\ndeclare(strict_types=1);\n\n// HtmxCache Component Render: {$class} ({$safeHash})\nreturn {$exported};\n";
 
-		$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents);
+		$this->writePhpCacheFile($dir, $filePath, $meta['short'], $meta['mtime'], $fileContents, $meta['nsTag']);
 	}
 
 	/**
@@ -479,32 +497,76 @@ class HtmxCache extends WireData
 		$deleted = 0;
 
 		if ($classOrShortName !== null && $classOrShortName !== '') {
-			$short = str_contains($classOrShortName, '\\')
-				? basename(str_replace('\\', '/', $classOrShortName))
-				: $classOrShortName;
-			$safe = $this->sanitizeIdentifier($short);
+			if (str_contains($classOrShortName, '\\')) {
+				$normalizedClass = ltrim($classOrShortName, '\\');
+				$short = $this->sanitizeIdentifier(basename(str_replace('\\', '/', $normalizedClass)));
+				$nsTag = 'ns' . substr(hash('xxh128', $normalizedClass), 0, 8);
 
-			foreach ([$this->getUiClassDir($safe), $this->getComponentClassDir($safe)] as $dir) {
-				$deleted += $this->deleteDirectoryFiles($dir, true);
+				foreach ([$this->getUiClassDir($short, $nsTag), $this->getComponentClassDir($short, $nsTag)] as $dir) {
+					$deleted += $this->deleteDirectoryFiles($dir, true);
+				}
+
+				$matchesFqcn = static fn (string $k): bool => ltrim(explode('|', $k, 2)[0], '\\') === $normalizedClass;
+				foreach (array_keys($this->uiClosures) as $k) {
+					if ($matchesFqcn($k)) {
+						unset($this->uiClosures[$k]);
+					}
+				}
+				foreach (array_keys($this->memoOutputs) as $k) {
+					if ($matchesFqcn($k)) {
+						unset($this->memoOutputs[$k]);
+					}
+				}
+				foreach (array_keys($this->componentSchemas) as $k) {
+					if ($matchesFqcn($k)) {
+						unset($this->componentSchemas[$k]);
+					}
+				}
+				foreach (array_keys($this->sourceMetaCache) as $k) {
+					if ($matchesFqcn($k)) {
+						unset($this->sourceMetaCache[$k]);
+					}
+				}
+
+				return $deleted;
 			}
 
+			$safe = $this->sanitizeIdentifier($classOrShortName);
+			$folderPattern = '/^' . preg_quote($safe, '/') . '_ns[0-9a-f]{8}$/';
+
+			foreach ([$this->getUiBaseDir(), $this->getComponentBaseDir()] as $baseDir) {
+				if (!is_dir($baseDir)) {
+					continue;
+				}
+				foreach (glob($baseDir . '*/', GLOB_ONLYDIR) ?: [] as $dir) {
+					$folderName = basename(rtrim($dir, '/'));
+					if ($folderName === $safe || preg_match($folderPattern, $folderName) === 1) {
+						$deleted += $this->deleteDirectoryFiles($dir, true);
+					}
+				}
+			}
+
+			$matchesShort = fn (string $k): bool => $this->sanitizeIdentifier(
+				basename(str_replace('\\', '/', explode('|', $k, 2)[0]))
+			) === $safe;
+
 			foreach (array_keys($this->uiClosures) as $k) {
-				if (str_contains($k, $safe)) {
+				if ($matchesShort($k)) {
 					unset($this->uiClosures[$k]);
 				}
 			}
 			foreach (array_keys($this->memoOutputs) as $k) {
-				if (str_contains($k, $safe)) {
+				if ($matchesShort($k)) {
 					unset($this->memoOutputs[$k]);
 				}
 			}
 			foreach (array_keys($this->componentSchemas) as $k) {
-				if (str_contains($k, $safe)) {
+				if ($matchesShort($k)) {
 					unset($this->componentSchemas[$k]);
 				}
 			}
 			foreach (array_keys($this->sourceMetaCache) as $k) {
-				if (str_contains($k, $safe)) {
+				if ($matchesShort($k)) {
 					unset($this->sourceMetaCache[$k]);
 				}
 			}
@@ -586,7 +648,9 @@ class HtmxCache extends WireData
 	 *   enabled: bool,
 	 *   path: string,
 	 *   maxShapesPerClass: int,
+	 *   uiClasses: int,
 	 *   uiFiles: int,
+	 *   componentClasses: int,
 	 *   componentFiles: int,
 	 *   totalFiles: int,
 	 *   totalBytes: int,
@@ -643,7 +707,6 @@ class HtmxCache extends WireData
 		return [
 			'enabled' => $this->enabled,
 			'path' => $this->getBasePath(),
-			'baseDir' => $this->getBasePath(),
 			'maxShapesPerClass' => $this->maxShapesPerClass,
 			'uiClasses' => $uiClasses,
 			'uiFiles' => $uiFiles,
@@ -651,24 +714,10 @@ class HtmxCache extends WireData
 			'componentFiles' => $componentFiles,
 			'totalFiles' => $uiFiles + $componentFiles,
 			'totalBytes' => $totalBytes,
-			'bytes' => $totalBytes,
 			'memoryUiClosures' => count($this->uiClosures),
 			'memoryMemoOutputs' => count($this->memoOutputs),
 			'memoryComponentSchemas' => count($this->componentSchemas),
 			'metrics' => $this->metrics,
-			'hits' => [
-				'memory' => $this->metrics['uiHits'],
-				'opcache' => $this->metrics['uiHits'],
-				'schema' => $this->metrics['schemaHits'],
-				'render' => $this->metrics['renderHits'],
-				'memo' => $this->metrics['memoHits'],
-			],
-			'misses' => [
-				'ui' => $this->metrics['uiMisses'],
-				'schema' => $this->metrics['schemaMisses'],
-				'render' => $this->metrics['renderMisses'],
-				'memo' => $this->metrics['memoMisses'],
-			],
 			'classes' => $classes,
 		];
 	}
@@ -702,19 +751,38 @@ class HtmxCache extends WireData
 		string $filePath,
 		string $shortClass,
 		int $currentMtime,
-		string $contents
+		string $contents,
+		string $nsTag = ''
 	): void {
-		if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+		$config = $this->wire()?->config ?? wire()?->config;
+		$chmodDir = ($config && is_string($config->chmodDir) && $config->chmodDir !== '')
+			? (int) octdec($config->chmodDir)
+			: 0755;
+		$chmodFile = ($config && is_string($config->chmodFile) && $config->chmodFile !== '')
+			? (int) octdec($config->chmodFile)
+			: 0644;
+
+		if (!is_dir($dir) && !@mkdir($dir, $chmodDir, true) && !is_dir($dir)) {
+			return;
+		}
+		if (is_link(rtrim($dir, '/')) || is_link($filePath)) {
 			return;
 		}
 
-		$tmpFile = $filePath . '.tmp.' . getmypid() . '.' . str_replace('.', '', uniqid('', true));
-		if (@file_put_contents($tmpFile, $contents, LOCK_EX) === false) {
+		$tmpFile = $filePath . '.tmp.' . getmypid() . '.' . bin2hex(random_bytes(8));
+		$fp = @fopen($tmpFile, 'xb');
+		if ($fp === false) {
+			return;
+		}
+		$written = @fwrite($fp, $contents);
+		@fflush($fp);
+		@fclose($fp);
+		if ($written === false || $written !== strlen($contents)) {
 			@unlink($tmpFile);
 			return;
 		}
 
-		@chmod($tmpFile, 0644);
+		@chmod($tmpFile, $chmodFile);
 		if (!@rename($tmpFile, $filePath)) {
 			@unlink($tmpFile);
 			return;
@@ -724,25 +792,48 @@ class HtmxCache extends WireData
 			@opcache_invalidate($filePath, true);
 		}
 
-		$this->pruneStaleAndOverflowFiles($dir, $shortClass, $currentMtime, $filePath);
+		$this->pruneStaleAndOverflowFiles($dir, $shortClass, $currentMtime, $filePath, $nsTag);
 	}
 
 	/**
-	 * Prune files in `$dir` that belong to an older `filemtime` of `$shortClass` or exceed `maxShapesPerClass`.
+	 * Prune files in `$dir` that belong to an older `filemtime` of `$shortClass` (scoped to `$nsTag` when present)
+	 * or exceed `maxShapesPerClass`.
 	 */
-	private function pruneStaleAndOverflowFiles(string $dir, string $shortClass, int $currentMtime, string $protectedFilePath = ''): void
-	{
+	private function pruneStaleAndOverflowFiles(
+		string $dir,
+		string $shortClass,
+		int $currentMtime,
+		string $protectedFilePath = '',
+		string $nsTag = ''
+	): void {
 		$files = glob($dir . $shortClass . '_*.php') ?: [];
 		if ($files === []) {
 			return;
 		}
 
-		$currentPrefix = $shortClass . '_' . $currentMtime . '_';
+		$currentPrefix = $nsTag !== ''
+			? $shortClass . '_' . $currentMtime . '_' . $nsTag . '_'
+			: $shortClass . '_' . $currentMtime . '_';
 		$activeFiles = [];
+		$shortPrefix = $shortClass . '_';
 
 		foreach ($files as $existingFile) {
 			$base = basename($existingFile);
-			if (!str_starts_with($base, $currentPrefix)) {
+			if (!str_starts_with($base, $shortPrefix)) {
+				continue;
+			}
+			$rest = substr($base, strlen($shortPrefix));
+			if (preg_match('/^(\d+)_(ns[0-9a-f]{8})_/', $rest, $m) === 1) {
+				$fileNsTag = $m[2];
+				if ($nsTag !== '' && $fileNsTag !== $nsTag) {
+					continue;
+				}
+				if ((int) $m[1] !== $currentMtime) {
+					$this->unlinkCacheFile($existingFile);
+				} else {
+					$activeFiles[$existingFile] = (int) @filemtime($existingFile);
+				}
+			} elseif (!str_starts_with($base, $currentPrefix)) {
 				$this->unlinkCacheFile($existingFile);
 			} else {
 				$activeFiles[$existingFile] = (int) @filemtime($existingFile);
@@ -778,6 +869,9 @@ class HtmxCache extends WireData
 
 	private function unlinkCacheFile(string $filePath): bool
 	{
+		if (!is_file($filePath) && !is_link($filePath)) {
+			return false;
+		}
 		if (function_exists('opcache_invalidate')) {
 			@opcache_invalidate($filePath, true);
 		}
@@ -801,7 +895,7 @@ class HtmxCache extends WireData
 				continue;
 			}
 			$fullPath = rtrim($dir, '/') . '/' . $item;
-			if (is_dir($fullPath)) {
+			if (!is_link($fullPath) && is_dir($fullPath)) {
 				$deleted += $this->deleteDirectoryFiles($fullPath, true);
 			} elseif ($this->unlinkCacheFile($fullPath)) {
 				$deleted++;

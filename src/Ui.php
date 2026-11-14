@@ -6,12 +6,12 @@ namespace Totoglu\Htmx;
 
 use InvalidArgumentException;
 use ProcessWire\Htmx;
+use ProcessWire\ProcessWire;
+use ProcessWire\Wire;
 use ReflectionMethod;
 use Totoglu\Htmx\Bag\AttributeBag;
 use Totoglu\Htmx\Bag\ParameterBag;
 use Totoglu\Htmx\Cache\HtmxCache;
-
-use function ProcessWire\wire;
 
 /**
  * Ui
@@ -21,8 +21,21 @@ use function ProcessWire\wire;
  * HTMX v4 attribute helper suite, component-specific Zone/Slot composition,
  * Value Gate short-circuiting, and two-phase Shape Compilation via HtmxCache.
  */
-abstract class Ui
+abstract class Ui extends Wire
 {
+	/** @var list<string> Dangerous HTML tag names blocked from compiled UI open tags */
+	private const array BLOCKED_TAG_NAMES = [
+		'script',
+		'style',
+		'iframe',
+		'object',
+		'embed',
+		'base',
+		'meta',
+		'link',
+	];
+
+	private const int MAX_EPHEMERAL_SHAPE_CLOSURES = 512;
 	public ParameterBag $parameters;
 	public AttributeBag $attributes;
 
@@ -104,6 +117,9 @@ abstract class Ui
 	/** @var array<class-string, bool> Cached reflection check for overridden `compileTemplate()` */
 	private static array $shapeCompilerRegistry = [];
 
+	/** @var array<string, callable> Per-process compiled shape closure map when `cache(false)` is active */
+	private static array $ephemeralShapeClosures = [];
+
 	/** @var array<string, string>|null Per-render cache of resolved runtime slot strings */
 	private ?array $resolvedRuntimeSlots = null;
 
@@ -121,7 +137,15 @@ abstract class Ui
 	 */
 	public static function make(array|ParameterBag $parameters = [], array|AttributeBag $attributes = []): static
 	{
-		return new static($parameters, $attributes);
+		$instance = new static($parameters, $attributes);
+		$wire = $instance->wire();
+		if ($wire instanceof ProcessWire) {
+			$wire->wire($instance);
+		}
+		$htmx = $instance->wire()?->htmx;
+		$instance->htmx = $htmx instanceof Htmx ? $htmx : null;
+
+		return $instance;
 	}
 
 	/**
@@ -130,7 +154,12 @@ abstract class Ui
 	 */
 	public function __construct(array|ParameterBag $parameters = [], array|AttributeBag $attributes = [])
 	{
-		$htmx = wire()->htmx;
+		parent::__construct();
+		$wire = $this->wire();
+		if ($wire instanceof ProcessWire) {
+			$wire->wire($this);
+		}
+		$htmx = $this->wire()?->htmx;
 		$this->htmx = $htmx instanceof Htmx ? $htmx : null;
 
 		$this->parameters = $parameters instanceof ParameterBag
@@ -727,53 +756,6 @@ abstract class Ui
 	}
 
 	/**
-	 * HTMX v4: hx-action + hx-method shorthand.
-	 */
-	public function hxAction(string $url, string $httpMethod = 'GET'): self
-	{
-		return $this->setAttribute('hx-action', $url)
-			->setAttribute('hx-method', strtoupper(trim($httpMethod)));
-	}
-
-	public function hxMethod(string $httpMethod): self
-	{
-		return $this->setAttribute('hx-method', strtoupper(trim($httpMethod)));
-	}
-
-	public function hxTarget(string $selector): self
-	{
-		return $this->target($selector);
-	}
-
-	public function hxSwap(string $style): self
-	{
-		return $this->swap($style);
-	}
-
-	public function hxInclude(string $selector): self
-	{
-		return $this->include($selector);
-	}
-
-	/**
-	 * @param string|array<string, mixed> $values
-	 */
-	public function hxVals(string|array $values): self
-	{
-		return $this->vals($values);
-	}
-
-	public function hxConfirm(string $message): self
-	{
-		return $this->confirm($message);
-	}
-
-	public function hxTrigger(string $spec): self
-	{
-		return $this->trigger($spec);
-	}
-
-	/**
 	 * HTMX v4: hx-method — set the HTTP method (get, post, put, delete, patch, query, ...).
 	 */
 	public function method(string $httpMethod): self
@@ -1035,11 +1017,6 @@ abstract class Ui
 		return $this->setAttribute('_', is_string($cleanScript) ? $cleanScript : $script);
 	}
 
-	public function _(string $script): self
-	{
-		return $this->hyperscript($script);
-	}
-
 	public function __(string $text, string $textdomain = 'site-htmx'): string
 	{
 		try {
@@ -1105,7 +1082,22 @@ abstract class Ui
 			$shapeValues['__zones'] = $this->zonePlacements;
 		}
 
+		$shapeValues['__lang'] = $this->resolveActiveLanguageId();
+
 		return $shapeValues;
+	}
+
+	/**
+	 * Resolve the active ProcessWire user language ID (`0` when multi-language is inactive).
+	 */
+	private function resolveActiveLanguageId(): int
+	{
+		$user = $this->wire()?->user;
+		if ($user !== null && isset($user->language) && is_object($user->language) && isset($user->language->id)) {
+			return (int) $user->language->id;
+		}
+
+		return 0;
 	}
 
 	/**
@@ -1148,12 +1140,29 @@ abstract class Ui
 	}
 
 	/**
+	 * Sanitize an HTML tag name for safe interpolation in compiled UI templates.
+	 */
+	protected static function sanitizeTagName(string $tag, string $fallback = 'div'): string
+	{
+		$trimmed = trim($tag);
+		if (
+			$trimmed === ''
+			|| preg_match('/^[a-zA-Z][a-zA-Z0-9\-]*$/', $trimmed) !== 1
+			|| in_array(strtolower($trimmed), self::BLOCKED_TAG_NAMES, true)
+		) {
+			return $fallback;
+		}
+		return $trimmed;
+	}
+
+	/**
 	 * Helper for `compileTemplate()`: generate PHP expression for an opening HTML tag with baked class attribute
 	 * and runtime attributes from `$attrs[$attrSlot]`.
 	 */
 	protected static function compileOpenTag(string $tag, string $classAttr, string $attrSlot = 'root'): string
 	{
-		$prefix = '<' . $tag . $classAttr;
+		$safeTag = self::sanitizeTagName($tag);
+		$prefix = '<' . $safeTag . $classAttr;
 		return var_export($prefix, true) . ' . ($attrs[' . var_export($attrSlot, true) . '] ?? \'\') . \'>\'';
 	}
 
@@ -1207,16 +1216,28 @@ abstract class Ui
 		$childrenHtml = $this->getResolvedChildrenHtml();
 		$runtimeAttrs = $this->buildRuntimeAttributesMap();
 
+		$shapeKeyValues = $this->buildShapeKeyValues();
 		$cache = $this->cacheable ? $this->getHtmxCache() : null;
 		if ($cache === null) {
-			$shape = $this->resolveShape();
-			$code = $this->compileTemplate($shape);
-			/** @var callable $closure */
-			$closure = eval('return ' . $code . ';');
+			$ephemeralKey = static::class . '|' . hash('xxh128', (string) json_encode($shapeKeyValues, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+			if (!isset(self::$ephemeralShapeClosures[$ephemeralKey])) {
+				$shape = $this->resolveShape();
+				$code = trim($this->compileTemplate($shape));
+				if (str_ends_with($code, ';')) {
+					$code = substr($code, 0, -1);
+				}
+				/** @var callable $compiled */
+				$compiled = eval('return ' . $code . ';');
+				if (count(self::$ephemeralShapeClosures) >= self::MAX_EPHEMERAL_SHAPE_CLOSURES) {
+					array_shift(self::$ephemeralShapeClosures);
+				}
+				self::$ephemeralShapeClosures[$ephemeralKey] = $compiled;
+			}
+
+			$closure = self::$ephemeralShapeClosures[$ephemeralKey];
 			return (string) $closure($slots, $runtimeAttrs, $childrenHtml);
 		}
 
-		$shapeKeyValues = $this->buildShapeKeyValues();
 		$closure = $cache->getOrCompileUi(
 			static::class,
 			$shapeKeyValues,
@@ -1371,6 +1392,7 @@ abstract class Ui
 					'slots' => $this->getResolvedRuntimeSlots(),
 					'attrs' => $this->buildRuntimeAttributesMap(),
 					'children' => $this->getResolvedChildrenHtml(),
+					'lang' => $this->resolveActiveLanguageId(),
 				];
 				$memoKey = hash('xxh128', (string) json_encode($memoPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 				$cachedMemo = $cache->getMemo(static::class, $memoKey);
@@ -1400,9 +1422,12 @@ abstract class Ui
 		try {
 			return $this->renderToString();
 		} catch (\Throwable $e) {
-			$config = wire()->config;
-			if ($config !== null && $config->debug) {
-				return "<div class='uk-alert uk-alert-danger'><h4>Error Rendering HTMX UI</h4><p>" . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . "</p></div>";
+			$this->wire()?->log?->error(
+				'HTMX UI Rendering Error (' . static::class . '): ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine()
+			);
+			$config = $this->wire()?->config;
+			if ($config !== null && !empty($config->debug)) {
+				return '<!-- HTMX UI Rendering Error: ' . htmlspecialchars($e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine(), ENT_QUOTES, 'UTF-8') . ' -->';
 			}
 			return '';
 		}

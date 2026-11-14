@@ -9,11 +9,17 @@ use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionProperty;
 use ProcessWire\Htmx;
+use ProcessWire\NullPage;
 use ProcessWire\Page;
 use ProcessWire\PageArray;
+use ProcessWire\User;
+use ProcessWire\WireCSRFException;
 use ProcessWire\WireData;
 use ProcessWire\WireException;
+use ProcessWire\WirePermissionException;
 use Totoglu\Htmx\Cache\HtmxCache;
+use Totoglu\Htmx\State\SignedStateCodec;
+use Totoglu\Htmx\View\ConfinedViewRenderer;
 
 /**
  * Component
@@ -34,8 +40,54 @@ abstract class Component extends WireData
 	public const ERR_INVALID_STATE = 1003;
 	public const ERR_STATE_EXPIRED = 1004;
 
+	/**
+	 * Maximum raw `hx__state` string length accepted before base64/HMAC processing (512 KB).
+	 */
+	public const int MAX_STATE_PAYLOAD_BYTES = 524_288;
+
+	/**
+	 * Maximum JSON recursion depth when decoding `hx__state`.
+	 */
+	public const int MAX_STATE_JSON_DEPTH = 64;
+
+	/**
+	 * Maximum number of `hx__state[]` array candidates inspected per request.
+	 */
+	public const int MAX_STATE_CANDIDATES = 32;
+
 	private const STATE_PAYLOAD_TOKEN = '<!--__HTMX_STATE_PAYLOAD__-->';
 	private const INSTANCE_ID_TOKEN = '__HTMX_CMP_ID__';
+
+	/**
+	 * Explicit class-to-fuel / HTMX service mapping for action dependency injection.
+	 *
+	 * @var array<string, string>
+	 */
+	private const PW_FUEL_CLASS_MAP = [
+		\ProcessWire\Pages::class => 'pages',
+		\ProcessWire\Fields::class => 'fields',
+		\ProcessWire\Templates::class => 'templates',
+		\ProcessWire\Modules::class => 'modules',
+		\ProcessWire\User::class => 'user',
+		\ProcessWire\Users::class => 'users',
+		\ProcessWire\Roles::class => 'roles',
+		\ProcessWire\Permissions::class => 'permissions',
+		\ProcessWire\WireInput::class => 'input',
+		\ProcessWire\Sanitizer::class => 'sanitizer',
+		\ProcessWire\Session::class => 'session',
+		\ProcessWire\WireCache::class => 'cache',
+		\ProcessWire\WireDatabasePDO::class => 'database',
+		\ProcessWire\WireFileTools::class => 'files',
+		\ProcessWire\WireDateTime::class => 'datetime',
+		\ProcessWire\WireLog::class => 'log',
+		\ProcessWire\Languages::class => 'languages',
+		\ProcessWire\Config::class => 'config',
+		Htmx::class => 'htmx',
+		HtmxCache::class => 'htmxCache',
+		Request::class => '__htmx_request',
+		Response::class => '__htmx_response',
+		Fragment::class => '__htmx_fragment',
+	];
 
 	protected string $stateKey = 'hx__state';
 
@@ -114,9 +166,24 @@ abstract class Component extends WireData
 	private bool $isCapturingRenderCache = false;
 
 	/**
+	 * @var string|null Unpredictable per-capture state payload placeholder token
+	 */
+	private ?string $activeCaptureStateToken = null;
+
+	/**
 	 * @var int Captured TTL hours passed to `renderStatePayload()` during render cache capture
 	 */
 	private int $capturedStateTtlHours = 24;
+
+	/**
+	 * @var int|null Originating page ID preserved from hydrated `hx__state` across `/hx/req` re-renders
+	 */
+	private ?int $originPageId = null;
+
+	/**
+	 * @var bool|null Originating admin execution context preserved from hydrated `hx__state` across `/hx/req` re-renders
+	 */
+	private ?bool $originAdmin = null;
 
 	/**
 	 * Inject a pre-verified state payload from the endpoint dispatcher to avoid redundant HMAC/JSON work.
@@ -231,10 +298,11 @@ abstract class Component extends WireData
 
 		$actions = [];
 		$actionMap = [];
+		$baseRef = self::$reflectionCache[self::class] ??= new ReflectionClass(self::class);
 
 		foreach ($ref->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
 			$methodName = $method->getName();
-			if (str_starts_with($methodName, '_')) {
+			if (str_starts_with($methodName, '_') || $baseRef->hasMethod($methodName)) {
 				continue;
 			}
 			$declaring = $method->getDeclaringClass();
@@ -255,9 +323,17 @@ abstract class Component extends WireData
 					$typeName = $pType->getName();
 					$allowsNull = $pType->allowsNull();
 
-					if (!$isBuiltin && str_starts_with($typeName, 'ProcessWire\\')) {
-						$shortName = substr(strrchr('\\' . $typeName, '\\'), 1);
-						$pwApiVar = strtolower($shortName);
+					if (!$isBuiltin) {
+						if ($typeName === Page::class) {
+							$pwApiVar = $param->getName() === 'page' ? 'page' : null;
+						} elseif (is_a($typeName, Page::class, true)) {
+							$pwApiVar = null;
+						} elseif (isset(self::PW_FUEL_CLASS_MAP[$typeName])) {
+							$pwApiVar = self::PW_FUEL_CLASS_MAP[$typeName];
+						} elseif (str_starts_with($typeName, 'ProcessWire\\')) {
+							$shortName = substr(strrchr('\\' . $typeName, '\\'), 1);
+							$pwApiVar = strtolower($shortName);
+						}
 					}
 				}
 
@@ -267,6 +343,8 @@ abstract class Component extends WireData
 					$candidateDefault = $param->getDefaultValue();
 					if (is_scalar($candidateDefault) || is_array($candidateDefault) || $candidateDefault === null) {
 						$defaultVal = $candidateDefault;
+					} elseif ($candidateDefault instanceof \BackedEnum) {
+						$defaultVal = $candidateDefault->value;
 					} else {
 						$hasDefault = false;
 					}
@@ -291,6 +369,7 @@ abstract class Component extends WireData
 		}
 
 		return [
+			'__schemaVersion' => 3,
 			'properties' => $properties,
 			'actions' => $actions,
 			'actionMap' => $actionMap,
@@ -338,13 +417,67 @@ abstract class Component extends WireData
 			}
 			$meta = $propSchemas[$k];
 			if ($meta['typeName'] !== null && !$meta['isBuiltin']) {
-				$this->{$k} = $v;
+				$typeName = $meta['typeName'];
+				if ($v === null) {
+					if ($meta['allowsNull']) {
+						$this->{$k} = null;
+					}
+				} elseif (is_object($v) && is_a($v, $typeName)) {
+					$this->{$k} = $v;
+				} elseif (is_subclass_of($typeName, \BackedEnum::class)) {
+					$enumCase = self::tryResolveBackedEnum($typeName, $v);
+					if ($enumCase !== null) {
+						$this->{$k} = $enumCase;
+					}
+				}
+			} elseif (is_object($v)) {
+				if ($meta['typeName'] === null || $meta['typeName'] === 'mixed' || $meta['typeName'] === 'object') {
+					$this->{$k} = $v;
+				} elseif ($meta['typeName'] === 'string' && $v instanceof \Stringable) {
+					$this->{$k} = (string) $v;
+				} elseif ($meta['typeName'] === 'array') {
+					$this->{$k} = [$v];
+				}
 			} else {
 				$this->{$k} = $this->coerceValueFromSchema($v, $meta['typeName'], $meta['isBuiltin'], $meta['allowsNull']);
 			}
 		}
 
 		return $this;
+	}
+
+	/**
+	 * Safely resolve a PHP 8.1+ `BackedEnum` case from an `int` or `string` input without throwing `TypeError` under `strict_types=1`.
+	 *
+	 * @param class-string<\BackedEnum> $enumClass
+	 */
+	private static function tryResolveBackedEnum(string $enumClass, mixed $value): ?\BackedEnum
+	{
+		if ($value instanceof $enumClass) {
+			return $value;
+		}
+		if (!is_int($value) && !is_string($value)) {
+			return null;
+		}
+
+		$ref = new \ReflectionEnum($enumClass);
+		$backing = $ref->getBackingType()?->getName();
+		if ($backing === 'int') {
+			if (is_int($value)) {
+				return $enumClass::tryFrom($value);
+			}
+			$trimmed = trim($value);
+			if (preg_match('/^-?\d+$/', $trimmed) === 1) {
+				return $enumClass::tryFrom((int) $trimmed);
+			}
+			return null;
+		}
+
+		if ($backing === 'string') {
+			return $enumClass::tryFrom((string) $value);
+		}
+
+		return null;
 	}
 
 	/**
@@ -357,9 +490,10 @@ abstract class Component extends WireData
 		}
 
 		$isArr = is_array($value);
+		$isObj = is_object($value);
 
 		if ($typeName === 'int') {
-			if ($isArr) {
+			if ($isArr || $isObj) {
 				return 0;
 			}
 			if (is_bool($value)) {
@@ -368,7 +502,7 @@ abstract class Component extends WireData
 			return is_numeric($value) ? (int) $value : ($value === null && $allowsNull ? null : 0);
 		}
 		if ($typeName === 'float') {
-			if ($isArr) {
+			if ($isArr || $isObj) {
 				return 0.0;
 			}
 			if (is_bool($value)) {
@@ -377,14 +511,17 @@ abstract class Component extends WireData
 			return is_numeric($value) ? (float) $value : ($value === null && $allowsNull ? null : 0.0);
 		}
 		if ($typeName === 'bool') {
-			if ($isArr) {
+			if ($isArr || $isObj) {
 				return false;
 			}
 			return $value === null && $allowsNull ? null : filter_var($value, FILTER_VALIDATE_BOOLEAN);
 		}
 		if ($typeName === 'string') {
 			if ($isArr) {
-				return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+				return (string) json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+			}
+			if ($isObj) {
+				return $value instanceof \Stringable ? (string) $value : '';
 			}
 			if ($value === null && $allowsNull) {
 				return null;
@@ -429,18 +566,13 @@ abstract class Component extends WireData
 	}
 
 	/**
-	 * Resolve HMAC salt from a ProcessWire config instance with defensive null-safety.
+	 * Resolve HMAC salt from a ProcessWire config instance with defensive null-safety and minimum entropy check.
 	 *
 	 * @throws WireException
 	 */
 	public static function resolveHmacSalt(?object $config): string
 	{
-		if ($config === null || !isset($config->userAuthSalt) || !is_string($config->userAuthSalt) || $config->userAuthSalt === '') {
-			throw new WireException(
-				'HTMX HMAC Salt Missing: config->userAuthSalt must be a non-empty string for Htmx Component state signing.'
-			);
-		}
-		return $config->userAuthSalt;
+		return SignedStateCodec::resolveSalt($config);
 	}
 
 	/**
@@ -452,39 +584,59 @@ abstract class Component extends WireData
 	}
 
 	/**
-	 * Verify HMAC signature and decode a raw `encoded|hash` state payload.
+	 * Resolve the current ProcessWire user ID (`0` when unavailable) for principal-bound state signing.
+	 */
+	protected function resolveCurrentUserId(): int
+	{
+		$user = $this->wire()->user;
+		if ($user !== null && isset($user->id)) {
+			return (int) $user->id;
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Return the declared user-input parameter names for a public `query*` action on `$class`,
+	 * or `null` when `$class` is not a valid `Component` subclass or does not declare `$action`.
+	 *
+	 * @return list<string>|null
+	 */
+	public static function resolveDeclaredQueryActionParams(string $class, string $action): ?array
+	{
+		if ($action === '' || stripos($action, 'query') !== 0 || str_starts_with($action, '_')) {
+			return null;
+		}
+
+		if (!class_exists($class) || !is_subclass_of($class, self::class)) {
+			return null;
+		}
+
+		$schema = self::$localSchemaCache[$class] ??= self::buildReflectionSchema($class);
+		$canonical = $schema['actionMap'][strtolower($action)] ?? null;
+		if (!is_string($canonical) || !isset($schema['actions'][$canonical])) {
+			return null;
+		}
+
+		$paramNames = [];
+		foreach ($schema['actions'][$canonical]['params'] as $paramMeta) {
+			if (($paramMeta['pwApiVar'] ?? null) === null && isset($paramMeta['name']) && is_string($paramMeta['name'])) {
+				$paramNames[] = $paramMeta['name'];
+			}
+		}
+
+		return $paramNames;
+	}
+
+	/**
+	 * Verify HKDF-HMAC signature and decode a raw `encoded|hash` state payload.
 	 *
 	 * @return array<string, mixed>
 	 * @throws WireException
 	 */
 	public static function decodeSignedPayload(string $payload, string $salt): array
 	{
-		$parts = explode('|', $payload, 2);
-		if (count($parts) !== 2) {
-			throw new WireException('HTMX State Format Invalid: Missing HMAC signature.', self::ERR_MALFORMED_STATE);
-		}
-
-		[$encoded, $hash] = $parts;
-		if ($encoded === '' || $hash === '') {
-			throw new WireException('HTMX State Format Invalid: Encoded or HMAC segment is empty.', self::ERR_MALFORMED_STATE);
-		}
-
-		$expectedHash = hash_hmac('sha256', $encoded, $salt);
-		if (!hash_equals($expectedHash, $hash)) {
-			throw new WireException('HTMX State Tampering Detected: Invalid HMAC signature.', self::ERR_BAD_HMAC);
-		}
-
-		$decodedJson = base64_decode($encoded, true);
-		$decoded = is_string($decodedJson) ? json_decode($decodedJson, true) : null;
-		if (!is_array($decoded)) {
-			throw new WireException('HTMX State Format Invalid: Payload could not be decoded.', self::ERR_INVALID_STATE);
-		}
-
-		if (isset($decoded['__expires']) && time() > (int) $decoded['__expires']) {
-			throw new WireException('HTMX State Expired: This payload is no longer valid (Replay Protection).', self::ERR_STATE_EXPIRED);
-		}
-
-		return $decoded;
+		return SignedStateCodec::decode($payload, $salt);
 	}
 
 	/**
@@ -493,9 +645,34 @@ abstract class Component extends WireData
 	public function mount(): void {}
 
 	/**
-	 * Decode a signed candidate payload and verify it belongs to `static::class` (and `$this->id` when explicit).
+	 * Lifecycle Authorization Gate: Executed after `mount()` / `hydrate()` and before `executeAction()` or `renderToString()`.
+	 *
+	 * Return `false` to block both action execution and component rendering (`403` on `/hx/req`, `WirePermissionException` on `renderComponent()`).
+	 */
+	public function authorize(): bool
+	{
+		return true;
+	}
+
+	/**
+	 * Action Authorization Gate: Executed before dispatching a resolved component action method.
+	 *
+	 * Return `false` to reject `$action` before invocation (`403` on `/hx/req`, `WirePermissionException` on `renderComponent()`).
+	 */
+	public function authorizeAction(string $action): bool
+	{
+		return true;
+	}
+
+	/** Maximum number of hydrated `PageArray` IDs per property */
+	public const MAX_HYDRATED_PAGE_IDS = 250;
+
+	/**
+	 * Decode a signed candidate payload and verify it belongs to `static::class`, the current user/session/origin,
+	 * and `$this->id` when explicit.
 	 *
 	 * @return array<string, mixed>|null
+	 * @throws WirePermissionException
 	 * @throws WireException
 	 */
 	private function decodeMatchingCandidate(string $candidate, string $salt): ?array
@@ -504,34 +681,116 @@ abstract class Component extends WireData
 		if (($decoded['__cmp'] ?? null) !== static::class) {
 			return null;
 		}
-		if ($this->hasExplicitId && isset($decoded['__id']) && (string) $decoded['__id'] !== $this->id) {
+		if ($this->hasExplicitId && (!isset($decoded['__id']) || (string) $decoded['__id'] !== $this->id)) {
 			return null;
 		}
+
+		SignedStateCodec::verifyClaims(
+			$decoded,
+			$this->wire(),
+			$salt,
+			$this->resolveCurrentUserId(),
+			$this->requestUrl(),
+			$this->endpointUrl !== ''
+		);
+
 		return $decoded;
 	}
 
 	/**
-	 * Check whether the current request either carries no state payload for `$this->stateKey`
-	 * or carries a signed state payload belonging to `static::class`.
+	 * Verify that a signed state payload's `__ep` claim matches this component's expected `requestUrl()` path.
+	 *
+	 * @param array<string, mixed> $decoded
+	 */
+	private function matchesSignedEndpoint(array $decoded): bool
+	{
+		if (!array_key_exists('__ep', $decoded)) {
+			return $this->endpointUrl === '';
+		}
+		if (!is_string($decoded['__ep']) || trim($decoded['__ep']) === '') {
+			return false;
+		}
+
+		return SignedStateCodec::endpointsMatch($decoded['__ep'], $this->requestUrl(), $this->wire()->config);
+	}
+
+	/**
+	 * Check whether the current request either carries no state/action payload at all (initial render)
+	 * or carries a signed state payload belonging to `static::class` (and `$this->id` when explicit).
 	 * Used by `Htmx::renderComponent()` so sibling components on multi-component pages
-	 * do not fail when another component's `hx__state` is submitted.
+	 * neither fail nor execute actions when another component's `hx__state` is submitted.
 	 */
 	public function matchesRequestState(): bool
 	{
+		$request = ($this->htmx && isset($this->htmx->request)) ? $this->htmx->request : null;
 		$input = $this->wire()->input;
-		if ($input === null) {
+		if ($request === null && $input === null) {
 			return true;
 		}
 
-		$payload = $input->post($this->stateKey);
+		$payload = $request !== null
+			? ($request->post($this->stateKey) ?? $request->queryParam($this->stateKey))
+			: $input?->post($this->stateKey);
 		if ($payload === null || $payload === '' || $payload === false) {
-			$payload = $input->get($this->stateKey);
+			$payload = $request !== null ? $request->get($this->stateKey) : $input?->get($this->stateKey);
 		}
+
 		if ($payload === null || $payload === '' || $payload === false) {
+			$postBag = $request !== null
+				? $request->statePostArray()
+				: (is_object($input?->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : []);
+			$getBag = $request !== null
+				? $request->getArray()
+				: (is_object($input?->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : []);
+
+			$anyStatePresent = false;
+			$inspected = 0;
+			foreach ([$postBag, $getBag] as $bag) {
+				if (!is_array($bag)) {
+					continue;
+				}
+				foreach ($bag as $k => $v) {
+					if (!is_string($k) || ($k !== 'hx__state' && !str_starts_with($k, 'hx__state__'))) {
+						continue;
+					}
+					if ((is_string($v) && $v !== '') || (is_array($v) && $v !== [])) {
+						$anyStatePresent = true;
+					}
+					if ($this->stateKey === 'hx__state' && str_starts_with($k, 'hx__state__') && is_string($v) && $v !== '') {
+						if (++$inspected > self::MAX_STATE_CANDIDATES) {
+							continue;
+						}
+						try {
+							$candDecoded = $this->decodeMatchingCandidate($v, $this->getHmacSalt());
+							if ($candDecoded !== null) {
+								$this->preDecodedState = $candDecoded;
+								$this->stateKey = $k;
+								return true;
+							}
+						} catch (WirePermissionException $permEx) {
+							throw $permEx;
+						} catch (\Throwable) {
+							return false;
+						}
+					}
+				}
+			}
+
+			if ($anyStatePresent) {
+				return false;
+			}
+
+			$actionCandidate = $request !== null
+				? ($request->post('__htmx_action') ?? $request->queryParam('__htmx_action') ?? $request->get('__htmx_action'))
+				: ($input?->post('__htmx_action') ?? $input?->get('__htmx_action'));
+			if (is_string($actionCandidate) && $actionCandidate !== '') {
+				return false;
+			}
+
 			return true;
 		}
 
-		$candidates = is_array($payload) ? $payload : [$payload];
+		$candidates = is_array($payload) ? array_slice($payload, 0, self::MAX_STATE_CANDIDATES) : [$payload];
 		foreach ($candidates as $candidate) {
 			if (!is_string($candidate) || $candidate === '') {
 				continue;
@@ -543,6 +802,8 @@ abstract class Component extends WireData
 				}
 				$this->preDecodedState = $decoded;
 				return true;
+			} catch (WirePermissionException $permEx) {
+				throw $permEx;
 			} catch (\Throwable) {
 				return false;
 			}
@@ -563,17 +824,20 @@ abstract class Component extends WireData
 		$this->preDecodedState = null;
 
 		if ($decoded === null) {
+			$request = ($this->htmx && isset($this->htmx->request)) ? $this->htmx->request : null;
 			$input = $this->wire()->input;
-			if ($input === null) {
+			if ($request === null && $input === null) {
 				return;
 			}
 
-			$payload = $input->post($this->stateKey);
+			$payload = $request !== null
+				? ($request->post($this->stateKey) ?? $request->queryParam($this->stateKey))
+				: $input?->post($this->stateKey);
 
 			// HTMX v4: allow GET-carried state for HX-Partial / HX-Request-Type: partial requests,
 			// as well as HX-Boost (full page) navigations and query* actions.
 			if ($payload === null || $payload === '' || $payload === false) {
-				$getPayload = $input->get($this->stateKey);
+				$getPayload = $request !== null ? $request->get($this->stateKey) : $input?->get($this->stateKey);
 				if ($getPayload !== null && $getPayload !== '' && $getPayload !== false) {
 					$payload = $getPayload;
 				}
@@ -582,46 +846,60 @@ abstract class Component extends WireData
 			// In some edge cases (e.g. multiple components within the same form),
 			// ProcessWire may provide the payload as an array.
 			if (is_array($payload)) {
+				$candidates = array_slice($payload, 0, self::MAX_STATE_CANDIDATES);
 				$matchedCandidate = null;
-				try {
-					$salt = $this->getHmacSalt();
-					foreach ($payload as $candidate) {
-						if (!is_string($candidate) || $candidate === '') {
-							continue;
-						}
-						$candDecoded = $this->decodeMatchingCandidate($candidate, $salt);
-						if ($candDecoded !== null) {
-							$decoded = $candDecoded;
-							$matchedCandidate = $candidate;
-							break;
-						}
+				$salt = $this->getHmacSalt();
+				foreach ($candidates as $candidate) {
+					if (!is_string($candidate) || $candidate === '') {
+						continue;
 					}
-				} catch (\Throwable) {
+					try {
+						$candDecoded = $this->decodeMatchingCandidate($candidate, $salt);
+					} catch (WirePermissionException $permEx) {
+						throw $permEx;
+					} catch (\Throwable) {
+						continue;
+					}
+					if ($candDecoded !== null) {
+						$decoded = $candDecoded;
+						$matchedCandidate = $candidate;
+						break;
+					}
 				}
-				if ($matchedCandidate !== null) {
-					$payload = $matchedCandidate;
-				} else {
-					$first = reset($payload);
-					$payload = is_string($first) ? $first : null;
-				}
+				$payload = $matchedCandidate;
 			}
 
 			if ((!is_string($payload) || $payload === '') && $this->stateKey !== 'hx__state') {
-				$fallback = $input->post('hx__state') ?? $input->get('hx__state');
+				$fallback = $request !== null
+					? ($request->post('hx__state') ?? $request->queryParam('hx__state') ?? $request->get('hx__state'))
+					: ($input?->post('hx__state') ?? $input?->get('hx__state'));
 				if (is_string($fallback) && $fallback !== '') {
-					$candDecoded = $this->decodeMatchingCandidate($fallback, $this->getHmacSalt());
-					if ($candDecoded !== null) {
-						$decoded = $candDecoded;
-						$payload = $fallback;
+					try {
+						$candDecoded = $this->decodeMatchingCandidate($fallback, $this->getHmacSalt());
+						if ($candDecoded !== null) {
+							$decoded = $candDecoded;
+							$payload = $fallback;
+						}
+					} catch (WirePermissionException $permEx) {
+						throw $permEx;
+					} catch (\Throwable) {
 					}
 				}
 			} elseif ((!is_string($payload) || $payload === '') && $this->stateKey === 'hx__state') {
-				$postBag = is_object($input->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : (is_array($_POST ?? null) ? $_POST : []);
-				$getBag = is_object($input->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : (is_array($_GET ?? null) ? $_GET : []);
+				$postBag = ($this->htmx && isset($this->htmx->request))
+					? $this->htmx->request->statePostArray()
+					: (is_object($input->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : []);
+				$getBag = ($this->htmx && isset($this->htmx->request))
+					? $this->htmx->request->getArray()
+					: (is_object($input->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : []);
+				$inspected = 0;
 				foreach ([$postBag, $getBag] as $bag) {
 					foreach ($bag as $k => $v) {
 						if (!is_string($k) || !str_starts_with($k, 'hx__state__') || !is_string($v) || $v === '') {
 							continue;
+						}
+						if (++$inspected > self::MAX_STATE_CANDIDATES) {
+							break 2;
 						}
 						try {
 							$candDecoded = $this->decodeMatchingCandidate($v, $this->getHmacSalt());
@@ -631,6 +909,8 @@ abstract class Component extends WireData
 								$this->stateKey = $k;
 								break 2;
 							}
+						} catch (WirePermissionException $permEx) {
+							throw $permEx;
 						} catch (\Throwable) {
 						}
 					}
@@ -653,9 +933,28 @@ abstract class Component extends WireData
 			throw new WireException('HTMX Component Tampering Detected: State payload does not belong to this component.');
 		}
 
+		SignedStateCodec::verifyClaims(
+			$decoded,
+			$this->wire(),
+			$this->getHmacSalt(),
+			$this->resolveCurrentUserId(),
+			$this->requestUrl(),
+			$this->endpointUrl !== ''
+		);
+
 		// Instance Identity Preservation
+		if ($this->hasExplicitId && (!isset($decoded['__id']) || (string) $decoded['__id'] !== $this->id)) {
+			return;
+		}
 		if (isset($decoded['__id']) && is_string($decoded['__id'])) {
 			$this->id = $decoded['__id'];
+		}
+
+		if (array_key_exists('__pid', $decoded)) {
+			$this->originPageId = max(0, (int) $decoded['__pid']);
+		}
+		if (array_key_exists('__adm', $decoded)) {
+			$this->originAdmin = (bool) $decoded['__adm'];
 		}
 
 		// Auto-Map Public Properties (with strict type coercion)
@@ -671,7 +970,7 @@ abstract class Component extends WireData
 	{
 		if ($this->isCapturingRenderCache) {
 			$this->capturedStateTtlHours = $ttlHours;
-			return self::STATE_PAYLOAD_TOKEN;
+			return $this->activeCaptureStateToken ?? self::STATE_PAYLOAD_TOKEN;
 		}
 
 		return $this->buildFreshStatePayload($ttlHours);
@@ -682,32 +981,23 @@ abstract class Component extends WireData
 	 */
 	private function buildFreshStatePayload(int $ttlHours = 24): string
 	{
-		$stateArray = $this->buildStateFromProperties();
-
-		$stateArray['__expires'] = time() + ($ttlHours * 3600);
-		$stateArray['__cmp'] = static::class;
-		$stateArray['__id'] = $this->id;
-
-		$jsonPayload = json_encode($stateArray, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-		if ($jsonPayload === false) {
-			$config = $this->wire()->config;
-			if ($config && $config->debug) {
-				$log = $this->wire()->log;
-				if ($log) {
-					$log->error('HTMX state json_encode failed: ' . json_last_error_msg());
-				}
-			}
-			$jsonPayload = (string) json_encode([
-				'__expires' => $stateArray['__expires'],
-				'__cmp' => static::class,
-				'__id' => $this->id,
-			], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+		$htmx = $this->htmx ?? $this->wire()->htmx;
+		if ($htmx instanceof Htmx) {
+			$htmx->markStatefulComponentRendered();
 		}
 
-		$encoded = base64_encode($jsonPayload);
-		$salt = $this->getHmacSalt();
-		$hash = hash_hmac('sha256', $encoded, $salt);
-		$payload = $encoded . '|' . $hash;
+		$payload = SignedStateCodec::encode(
+			$this->buildStateFromProperties(),
+			$this->getHmacSalt(),
+			$this->wire(),
+			$ttlHours,
+			static::class,
+			$this->id,
+			$this->resolveCurrentUserId(),
+			$this->requestUrl(),
+			$this->originPageId,
+			$this->originAdmin
+		);
 
 		$csrfHtml = '';
 		$session = $this->wire()->session;
@@ -749,44 +1039,79 @@ abstract class Component extends WireData
 	 * and automatically calls the corresponding public method on this class, mapping request parameters.
 	 *
 	 * HTMX v4 support:
-	 * - POST = state-mutating actions (CSRF-validated, default)
-	 * - GET  = read-only / QUERY actions (no CSRF — method must be prefixed with `query`)
+	 * - POST / PUT / PATCH / DELETE = state-mutating actions (CSRF-validated, fail-closed)
+	 * - GET / QUERY                 = read-only / QUERY actions (method must be prefixed with `query`)
 	 */
 	public function executeAction(string $actionParam = '__htmx_action'): bool
 	{
-		$input = $this->wire()->input;
-		if ($input === null) {
+		if (!$this->renderReady()) {
 			return false;
 		}
 
-		$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-		$isPost = ($method === 'POST');
+		$request = ($this->htmx && isset($this->htmx->request)) ? $this->htmx->request : null;
+		$input = $this->wire()->input;
+		if ($request === null && $input === null) {
+			return false;
+		}
+
+		$method = $request !== null
+			? $request->rawMethod()
+			: strtoupper((string) ($input?->requestMethod() ?: 'GET'));
+		$isMutatingVerb = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true);
+		$isDeleteMethod = ($method === 'DELETE');
 		$isQueryMethod = ($method === 'QUERY');
 
-		$action = $isPost
-			? $input->post($actionParam)
-			: ($isQueryMethod ? ($input->post($actionParam) ?? $input->get($actionParam)) : $input->get($actionParam));
+		$readActionParam = static function (string $paramName) use ($request, $input, $isMutatingVerb, $isDeleteMethod, $isQueryMethod): mixed {
+			if ($isMutatingVerb && !$isDeleteMethod) {
+				return $request !== null ? $request->post($paramName) : $input?->post($paramName);
+			}
+			if ($isDeleteMethod) {
+				$postVal = $request !== null ? $request->post($paramName) : $input?->post($paramName);
+				if ($postVal !== null && $postVal !== '') {
+					return $postVal;
+				}
+				return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+			}
+			if ($isQueryMethod) {
+				$queryVal = $request?->queryParam($paramName);
+				if ($queryVal !== null && $queryVal !== '') {
+					return $queryVal;
+				}
+				return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+			}
+			return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+		};
+
+		$action = $readActionParam($actionParam);
 		if ((!$action || !is_string($action)) && $actionParam !== '__htmx_action') {
-			$action = $isPost
-				? $input->post('__htmx_action')
-				: ($isQueryMethod ? ($input->post('__htmx_action') ?? $input->get('__htmx_action')) : $input->get('__htmx_action'));
+			$action = $readActionParam('__htmx_action');
 		}
 
 		if (!$action || !is_string($action) || $action === '') {
 			return false;
 		}
 
-		// Security: state mutations MUST be POST; GET/QUERY can only run query* methods.
+		// Security: state mutations MUST use a mutating HTTP verb; GET/QUERY can only run query* methods.
 		$isQueryAction = stripos($action, 'query') === 0;
-		if (!$isPost && !$isQueryAction) {
+		if (!$isMutatingVerb && !$isQueryAction) {
 			return false;
 		}
 
-		// CSRF token validation for all POST (state-mutating) actions
-		if ($isPost) {
-			$session = $this->wire()->session;
-			if ($session && $session->CSRF) {
-				$session->CSRF->validate();
+		// CSRF token validation for all state-mutating HTTP verbs (POST, PUT, PATCH, DELETE) (fail-closed)
+		if ($isMutatingVerb) {
+			if ($request !== null) {
+				$request->syncJsonToPost();
+				$request->syncCsrfToPost(true);
+			}
+			$config = $this->wire()->config;
+			$protectCsrf = $config === null || !isset($config->protectCSRF) || (bool) $config->protectCSRF;
+			if ($protectCsrf) {
+				$session = $this->wire()->session;
+				$csrf = $session ? $session->CSRF : null;
+				if (!is_object($csrf) || !method_exists($csrf, 'validate')) {
+					throw new WireCSRFException('CSRF Validation Failed: Session CSRF manager unavailable.');
+				}
+				$csrf->validate();
 			}
 		}
 
@@ -806,44 +1131,103 @@ abstract class Component extends WireData
 			return false;
 		}
 
+		if (!$this->authorize() || !$this->authorizeAction($canonicalMethod)) {
+			throw new WirePermissionException('HTMX Component Action Unauthorized.');
+		}
+
 		$actionMeta = $schema['actions'][$canonicalMethod];
 
 		// Build parameters based on input data mapping to compiled method signature
 		$args = [];
 		foreach ($actionMeta['params'] as $paramMeta) {
 			$name = $paramMeta['name'];
+			$typeName = $paramMeta['typeName'];
+			$isBuiltin = $paramMeta['isBuiltin'];
+			$allowsNull = $paramMeta['allowsNull'];
 			$val = null;
+			$resolvedNonNull = false;
 
-			if ($paramMeta['typeName'] !== null && !$paramMeta['isBuiltin']) {
+			if ($typeName !== null && !$isBuiltin) {
 				$apiName = $paramMeta['pwApiVar'];
 				if ($apiName !== null) {
-					$apiVal = $this->wire()->get($apiName);
-					if (is_object($apiVal) && is_a($apiVal, $paramMeta['typeName'])) {
+					$apiVal = match ($apiName) {
+						'__htmx_request' => $this->htmx?->request,
+						'__htmx_response' => $this->htmx?->response,
+						'__htmx_fragment' => $this->htmx?->fragment,
+						default => $this->wire($apiName),
+					};
+					if (is_object($apiVal) && is_a($apiVal, $typeName)) {
 						$val = $apiVal;
+						$resolvedNonNull = true;
+					}
+				} elseif (is_a($typeName, Page::class, true)) {
+					$rawVal = $readActionParam($name);
+					if (is_int($rawVal) || (is_string($rawVal) && ctype_digit(trim($rawVal)))) {
+						$pageId = (int) $rawVal;
+						if ($pageId > 0) {
+							$loadedPage = $this->wire()->pages?->get($pageId);
+							if (
+								$loadedPage instanceof Page
+								&& $loadedPage->id > 0
+								&& is_a($loadedPage, $typeName)
+								&& !($loadedPage instanceof User && !is_a($typeName, User::class, true))
+								&& !$loadedPage->isTrash()
+								&& (!$loadedPage->isUnpublished() || $loadedPage->editable())
+								&& $loadedPage->viewable(false)
+							) {
+								$val = $loadedPage;
+								$resolvedNonNull = true;
+							}
+						}
+					}
+				} elseif (is_subclass_of($typeName, \BackedEnum::class)) {
+					$rawVal = $readActionParam($name);
+					if ($rawVal !== null) {
+						$enumCase = self::tryResolveBackedEnum($typeName, $rawVal);
+						if ($enumCase !== null) {
+							$val = $enumCase;
+							$resolvedNonNull = true;
+						}
 					}
 				}
 			} else {
-				$rawVal = $isPost
-					? $input->post($name)
-					: ($isQueryMethod ? ($input->post($name) ?? $input->get($name)) : $input->get($name));
+				$rawVal = $readActionParam($name);
 				if ($rawVal !== null) {
-					$val = $this->coerceValueFromSchema(
+					$coerced = $this->coerceValueFromSchema(
 						$rawVal,
-						$paramMeta['typeName'],
-						$paramMeta['isBuiltin'],
-						$paramMeta['allowsNull']
+						$typeName,
+						$isBuiltin,
+						$allowsNull
 					);
+					if ($coerced !== null) {
+						$val = $coerced;
+						$resolvedNonNull = true;
+					}
 				}
 			}
 
-			if ($val === null && $paramMeta['hasDefault']) {
-				$val = $paramMeta['default'];
+			if (!$resolvedNonNull && $paramMeta['hasDefault']) {
+				$defaultVal = $paramMeta['default'];
+				if ($typeName !== null && !$isBuiltin && is_subclass_of($typeName, \BackedEnum::class)) {
+					$enumDefault = self::tryResolveBackedEnum($typeName, $defaultVal);
+					if ($enumDefault !== null) {
+						$val = $enumDefault;
+						$resolvedNonNull = true;
+					}
+				} else {
+					$val = $defaultVal;
+					$resolvedNonNull = ($defaultVal !== null);
+				}
+			}
+
+			if (!$resolvedNonNull && $val === null && $typeName !== null && $typeName !== 'mixed' && !$allowsNull) {
+				return false;
 			}
 
 			$args[] = $val;
 		}
 
-		if ($isPost && !$isQueryAction) {
+		if ($isMutatingVerb && !$isQueryAction) {
 			$this->actionMutated = true;
 		}
 
@@ -875,6 +1259,16 @@ abstract class Component extends WireData
 	protected function onDemoModeBlocked(string $action): void
 	{
 		$this->actionMutated = true;
+		if ($this->htmx && isset($this->htmx->request)) {
+			$this->htmx->request->purgeMutatingGlobals([$this->stateKey, 'hx__state']);
+		} else {
+			$_POST = [];
+			$_FILES = [];
+			$input = $this->wire()->input;
+			if ($input && is_object($input->post) && method_exists($input->post, 'removeAll')) {
+				$input->post->removeAll();
+			}
+		}
 		$title = $this->_('Demo Mode');
 		$message = $this->_('State-changing actions are disabled in demo mode.');
 
@@ -930,14 +1324,25 @@ abstract class Component extends WireData
 
 			$val = $initializedVars[$name];
 
-			// 1. ProcessWire Object Synthesis (Dehydration)
+			// 1. ProcessWire Object & BackedEnum Synthesis (Dehydration)
 			if (is_object($val)) {
-				if ($val instanceof Page && $val->id) {
-					$state[$name] = ['__wire_model' => 'Page', 'id' => $val->id];
+				if ($val instanceof \BackedEnum) {
+					$state[$name] = $val->value;
 					continue;
 				}
-				if ($val instanceof PageArray && $val->count()) {
-					$state[$name] = ['__wire_model' => 'PageArray', 'ids' => $val->explode('id')];
+				if ($val instanceof NullPage || ($val instanceof Page && !$val->id)) {
+					$state[$name] = ['__wire_model' => 'Page', 'id' => 0];
+					continue;
+				}
+				if ($val instanceof Page && $val->id) {
+					$state[$name] = ['__wire_model' => 'Page', 'id' => (int) $val->id];
+					continue;
+				}
+				if ($val instanceof PageArray) {
+					$state[$name] = [
+						'__wire_model' => 'PageArray',
+						'ids' => $val->count() ? array_slice($val->explode('id'), 0, self::MAX_HYDRATED_PAGE_IDS) : [],
+					];
 					continue;
 				}
 
@@ -947,12 +1352,36 @@ abstract class Component extends WireData
 				continue;
 			}
 
-			// 2. We only auto-dehydrate scalars or simple arrays
-			if (is_scalar($val) || is_array($val) || $val === null) {
+			// 2. We only auto-dehydrate scalars or simple arrays (stripping internal `__wire_model` markers)
+			if (is_array($val)) {
+				$state[$name] = self::stripWireModelMarkers($val);
+			} elseif (is_scalar($val) || $val === null) {
 				$state[$name] = $val;
 			}
 		}
 		return $state;
+	}
+
+	/**
+	 * Recursively strip internal `__wire_model` synthesis keys from plain array properties prior to dehydration.
+	 *
+	 * @param array<mixed, mixed> $data
+	 * @return array<mixed, mixed>
+	 */
+	private static function stripWireModelMarkers(array $data, int $depth = 0): array
+	{
+		if ($depth > 32) {
+			return [];
+		}
+
+		unset($data['__wire_model']);
+		foreach ($data as $k => $v) {
+			if (is_array($v)) {
+				$data[$k] = self::stripWireModelMarkers($v, $depth + 1);
+			}
+		}
+
+		return $data;
 	}
 
 	/**
@@ -977,31 +1406,90 @@ abstract class Component extends WireData
 
 			$meta = $propSchemas[$k];
 
-			// 1. ProcessWire Object Synthesis (Hydration)
+			// 1. ProcessWire Object Synthesis (strictly verified against declared property type, RBAC viewable(), and Trash guards)
 			if (is_array($v) && isset($v['__wire_model'])) {
-				if ($pages === null) {
+				$declaredType = $meta['typeName'];
+				$isDeclaredObjectType = $declaredType !== null && !$meta['isBuiltin'];
+				if (!$isDeclaredObjectType || $pages === null) {
 					continue;
 				}
-				if ($v['__wire_model'] === 'Page' && isset($v['id'])) {
-					$page = $pages->get((int) $v['id']);
-					if ($page->id) {
-						$this->{$k} = $page;
+				if ($v['__wire_model'] === 'Page' && isset($v['id']) && is_a($declaredType, Page::class, true)) {
+					$pageId = (int) $v['id'];
+					if ($pageId === 0) {
+						if (is_a(NullPage::class, $declaredType, true)) {
+							$this->{$k} = $pages->newNullPage();
+						} elseif ($meta['allowsNull']) {
+							$this->{$k} = null;
+						}
+						continue;
+					}
+					if ($pageId > 0) {
+						$page = $pages->get($pageId);
+						$canAccess = $page instanceof Page
+							&& $page->id > 0
+							&& is_a($page, $declaredType)
+							&& !($page instanceof User && !is_a($declaredType, User::class, true))
+							&& !$page->isTrash()
+							&& (!$page->isUnpublished() || $page->editable())
+							&& $page->viewable(false);
+						if ($canAccess) {
+							$this->{$k} = $page;
+						} elseif ($meta['allowsNull']) {
+							$this->{$k} = null;
+						} else {
+							throw new WirePermissionException('HTMX State Hydration Denied: Referenced page is no longer accessible.');
+						}
 					}
 					continue;
 				}
-				if ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids'])) {
-					$ids = array_map('intval', $v['ids']);
-					$foundPages = $pages->getById($ids);
+				if ($v['__wire_model'] === 'PageArray' && isset($v['ids']) && is_array($v['ids']) && is_a($declaredType, PageArray::class, true)) {
+					$boundedIds = array_values(array_filter(
+						array_map('intval', array_slice($v['ids'], 0, self::MAX_HYDRATED_PAGE_IDS)),
+						static fn (int $id): bool => $id > 0
+					));
+					$foundPages = $boundedIds !== [] ? $pages->getById($boundedIds) : $pages->newPageArray();
 					if ($foundPages instanceof PageArray) {
-						$this->{$k} = clone $foundPages;
+						$safePages = $pages->newPageArray();
+						foreach ($foundPages as $foundPage) {
+							if (
+								$foundPage instanceof Page
+								&& $foundPage->id > 0
+								&& !($foundPage instanceof User)
+								&& !$foundPage->isTrash()
+								&& (!$foundPage->isUnpublished() || $foundPage->editable())
+								&& $foundPage->viewable(false)
+							) {
+								$safePages->add($foundPage);
+							}
+						}
+						if (is_a($safePages, $declaredType)) {
+							$this->{$k} = $safePages;
+						}
 					}
 					continue;
 				}
+				continue;
 			}
 
-			// 2. Primitive type coercion for strict_types compatibility
-			if (is_object($v) || ($meta['typeName'] !== null && !$meta['isBuiltin'])) {
-				$this->{$k} = $v;
+			// 2. Primitive & enum type coercion for strict_types compatibility
+			if ($meta['typeName'] !== null && !$meta['isBuiltin']) {
+				$typeName = $meta['typeName'];
+				if ($v === null) {
+					if ($meta['allowsNull']) {
+						$this->{$k} = null;
+					}
+				} elseif (is_object($v) && is_a($v, $typeName)) {
+					$this->{$k} = $v;
+				} elseif (is_subclass_of($typeName, \BackedEnum::class)) {
+					$enumCase = self::tryResolveBackedEnum($typeName, $v);
+					if ($enumCase !== null) {
+						$this->{$k} = $enumCase;
+					}
+				}
+			} elseif (is_object($v)) {
+				if ($meta['typeName'] === null || $meta['typeName'] === 'mixed' || $meta['typeName'] === 'object') {
+					$this->{$k} = $v;
+				}
 			} else {
 				$this->{$k} = $this->coerceValueFromSchema(
 					$v,
@@ -1040,18 +1528,18 @@ abstract class Component extends WireData
 
 			// 2. Is it a file path?
 			$config = $this->wire()->config;
-			if (is_string($this->view) && $config && (str_contains($this->view, '.php') || is_file($config->paths->root . ltrim($this->view, '/')))) {
-				$paths = $config->paths;
-				$file = $this->view;
-
-				if (!str_starts_with($file, '/') && !str_starts_with($file, $paths->root)) {
-					$file = $paths->templates . ltrim($file, '/');
-				} elseif (str_starts_with($file, '/') && !str_starts_with($file, $paths->root)) {
-					$file = rtrim($paths->root, '/') . $file;
+			if (is_string($this->view)) {
+				if (
+					str_contains($this->view, '..')
+					|| str_contains($this->view, "\0")
+					|| str_contains($this->view, '\\')
+					|| preg_match('/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//', $this->view) === 1
+				) {
+					return '';
 				}
 
-				if (is_file($file)) {
-					$vars = ['component' => $this];
+				if ($config && (str_contains($this->view, '.php') || is_file($config->paths->root . ltrim($this->view, '/')))) {
+					$vars = [];
 					$schema = $this->getCompiledSchema();
 					$initializedVars = get_object_vars($this);
 					foreach ($schema['properties'] as $propName => $_meta) {
@@ -1060,22 +1548,14 @@ abstract class Component extends WireData
 						}
 					}
 
-					$options = [];
-					$htmx = $this->wire()->htmx;
-					if ($htmx && !empty($htmx->allowedComponentPaths)) {
-						$options = [
-							'allowedPaths' => array_merge(
-								[$paths->templates],
-								$htmx->allowedComponentPaths
-							)
-						];
-					}
-					$files = $this->wire()->files;
-					if ($files) {
-						return (string) $files->render($file, $vars, $options);
-					}
-				} elseif ($config->debug) {
-					return '<!-- HTMX Component Error: View file not found at ' . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . ' -->';
+					return ConfinedViewRenderer::render(
+						$this->wire(),
+						$this->view,
+						$vars,
+						[],
+						['component' => $this],
+						true
+					);
 				}
 			}
 
@@ -1103,7 +1583,7 @@ abstract class Component extends WireData
 		$endpoint = $htmx && $htmx->endpointUrl ? $htmx->endpointUrl : '/hx/req';
 
 		$config = $this->wire()->config;
-		$root = $config ? rtrim((string) $config->urls->root, '/') : '';
+		$root = $config ? rtrim((string) $config->urls->get('root'), '/') : '';
 
 		if (is_string($endpoint) && (str_starts_with($endpoint, 'http://') || str_starts_with($endpoint, 'https://'))) {
 			return $endpoint;
@@ -1131,10 +1611,14 @@ abstract class Component extends WireData
 			return $this->renderToString();
 		} catch (\Throwable $e) {
 			$config = $this->wire()->config;
+			$log = $this->wire()->log;
+			if ($log) {
+				$log->error('HTMX Component Rendering Error (' . static::class . '): ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+			}
 			if ($config && $config->debug) {
 				return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine(), ENT_QUOTES, 'UTF-8') . "\nStack Trace:\n" . htmlspecialchars($e->getTraceAsString(), ENT_QUOTES, 'UTF-8') . " -->";
 			}
-			return "<!-- Component Rendering Error: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8') . " -->";
+			return '';
 		}
 	}
 
@@ -1150,25 +1634,69 @@ abstract class Component extends WireData
 			unset($state['id']);
 		}
 
-		$langId = 0;
-		$user = $this->wire()->user;
-		if ($user && isset($user->language) && is_object($user->language) && isset($user->language->id)) {
-			$langId = (int) $user->language->id;
+		$pageRefs = [];
+		$initializedVars = get_object_vars($this);
+		foreach ($this->getCompiledSchema()['properties'] as $propName => $_meta) {
+			if (!array_key_exists($propName, $initializedVars)) {
+				continue;
+			}
+			$propVal = $initializedVars[$propName];
+			if ($propVal instanceof Page && $propVal->id > 0) {
+				$pageRefs[$propName] = $propVal->id . ':' . (int) $propVal->modified . ':' . (int) $propVal->status;
+			} elseif ($propVal instanceof PageArray && $propVal->count() > 0) {
+				$items = [];
+				foreach ($propVal as $item) {
+					if ($item instanceof Page && $item->id > 0) {
+						$items[] = $item->id . ':' . (int) $item->modified . ':' . (int) $item->status;
+					}
+				}
+				$pageRefs[$propName] = $items;
+			}
 		}
+
+		$langId = 0;
+		$authScope = 'guest';
+		$user = $this->wire()->user;
+		if ($user) {
+			if (isset($user->language) && is_object($user->language) && isset($user->language->id)) {
+				$langId = (int) $user->language->id;
+			}
+			if (method_exists($user, 'isLoggedin') && $user->isLoggedin() && isset($user->id)) {
+				$authScope = 'u:' . (int) $user->id;
+			}
+		}
+
+		$config = $this->wire()->config;
+		$schemeHost = (($config?->https ?? false) ? 'https://' : 'http://') . strtolower((string) ($config?->httpHost ?? ''));
 
 		return [
 			'state' => $state,
+			'pageRefs' => $pageRefs,
 			'stateKey' => $this->stateKey,
-			'endpoint' => $this->endpointUrl,
+			'endpoint' => $this->requestUrl(),
+			'host' => $schemeHost,
+			'demo' => (bool) ($config?->demo ?? false),
 			'lang' => $langId,
+			'auth' => $authScope,
 			'view' => is_string($this->view) ? $this->view : null,
 		];
 	}
 
+	/** @var list<string> Protected `ProcessWire.config` keys never stored or replayed via component render cache */
+	private const BLOCKED_JS_CONFIG_KEYS = [
+		'csrf',
+		'urls',
+		'admin',
+		'pwHtmxConfigToken',
+		'__proto__',
+		'constructor',
+		'prototype',
+	];
+
 	/**
 	 * Replay cached `$config->scripts`, `$config->styles`, and `$config->js()` deltas on a render cache hit.
 	 *
-	 * @param array{scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>} $assets
+	 * @param array{scripts?: list<string>, styles?: list<string>, jsConfig?: array<string, mixed>, stateToken?: string, idToken?: string} $assets
 	 */
 	private function replayRenderCacheAssets(array $assets): void
 	{
@@ -1179,33 +1707,44 @@ abstract class Component extends WireData
 
 		if (!empty($assets['scripts']) && $config->scripts) {
 			foreach ($assets['scripts'] as $url) {
-				$config->scripts->add($url);
+				if (is_string($url) && Htmx::isSafeAssetUrl($url, $config)) {
+					$config->scripts->add($url);
+				}
 			}
 		}
 
 		if (!empty($assets['styles']) && $config->styles) {
 			foreach ($assets['styles'] as $url) {
-				$config->styles->add($url);
+				if (is_string($url) && Htmx::isSafeAssetUrl($url, $config)) {
+					$config->styles->add($url);
+				}
 			}
 		}
 
 		if (!empty($assets['jsConfig']) && is_array($assets['jsConfig'])) {
 			foreach ($assets['jsConfig'] as $key => $val) {
-				$config->js((string) $key, $val);
+				$keyStr = (string) $key;
+				if (!in_array($keyStr, self::BLOCKED_JS_CONFIG_KEYS, true)) {
+					$config->js($keyStr, $val);
+				}
 			}
 		}
 	}
 
 	/**
-	 * Replace component render cache tokens (`__HTMX_CMP_ID__` and `<!--__HTMX_STATE_PAYLOAD__-->`)
-	 * with fresh per-instance values.
+	 * Replace component render cache tokens with fresh per-instance values.
 	 */
-	private function detokenizeRenderedHtml(string $tokenizedHtml, int $stateTtlHours): string
-	{
-		$html = str_replace(self::INSTANCE_ID_TOKEN, $this->id, $tokenizedHtml);
-		if (str_contains($html, self::STATE_PAYLOAD_TOKEN)) {
+	private function detokenizeRenderedHtml(
+		string $tokenizedHtml,
+		int $stateTtlHours,
+		string $stateToken = self::STATE_PAYLOAD_TOKEN,
+		string $idToken = self::INSTANCE_ID_TOKEN
+	): string {
+		$safeId = htmlspecialchars($this->id, ENT_QUOTES, 'UTF-8');
+		$html = $idToken !== '' ? str_replace($idToken, $safeId, $tokenizedHtml) : $tokenizedHtml;
+		if ($stateToken !== '' && str_contains($html, $stateToken)) {
 			$freshState = $this->buildFreshStatePayload($stateTtlHours);
-			$html = str_replace(self::STATE_PAYLOAD_TOKEN, $freshState, $html);
+			$html = str_replace($stateToken, $freshState, $html);
 		}
 		return $html;
 	}
@@ -1215,6 +1754,10 @@ abstract class Component extends WireData
 	 */
 	public function renderToString(): string
 	{
+		if (!$this->authorize()) {
+			throw new WirePermissionException('HTMX Component Render Unauthorized.');
+		}
+
 		if (!$this->renderReady()) {
 			return '';
 		}
@@ -1237,7 +1780,13 @@ abstract class Component extends WireData
 				$stateTtlHours = isset($cachedEntry['assets']['stateTtlHours']) && is_int($cachedEntry['assets']['stateTtlHours'])
 					? $cachedEntry['assets']['stateTtlHours']
 					: 24;
-				$html = $this->detokenizeRenderedHtml($cachedEntry['html'], $stateTtlHours);
+				$cachedStateToken = isset($cachedEntry['assets']['stateToken']) && is_string($cachedEntry['assets']['stateToken']) && $cachedEntry['assets']['stateToken'] !== ''
+					? $cachedEntry['assets']['stateToken']
+					: self::STATE_PAYLOAD_TOKEN;
+				$cachedIdToken = isset($cachedEntry['assets']['idToken']) && is_string($cachedEntry['assets']['idToken']) && $cachedEntry['assets']['idToken'] !== ''
+					? $cachedEntry['assets']['idToken']
+					: self::INSTANCE_ID_TOKEN;
+				$html = $this->detokenizeRenderedHtml($cachedEntry['html'], $stateTtlHours, $cachedStateToken, $cachedIdToken);
 				$this->afterRender($html);
 				return $html;
 			}
@@ -1246,12 +1795,18 @@ abstract class Component extends WireData
 			$beforeAssets = Htmx::snapshotConfigAssets($config);
 			$beforeOobCount = ($this->htmx !== null && isset($this->htmx->fragment)) ? $this->htmx->fragment->count() : 0;
 
+			$captureNonce = bin2hex(random_bytes(12));
+			$stateToken = '<!--__HTMX_SP_' . $captureNonce . '__-->';
+			$idToken = '__HTMX_ID_' . $captureNonce . '__';
+
 			$this->isCapturingRenderCache = true;
+			$this->activeCaptureStateToken = $stateToken;
 			$this->capturedStateTtlHours = 24;
 			try {
 				$rawHtml = $this->render();
 			} finally {
 				$this->isCapturingRenderCache = false;
+				$this->activeCaptureStateToken = null;
 			}
 
 			$afterOobCount = ($this->htmx !== null && isset($this->htmx->fragment)) ? $this->htmx->fragment->count() : 0;
@@ -1261,19 +1816,29 @@ abstract class Component extends WireData
 
 				$tokenizedHtml = $rawHtml;
 				if (!$this->hasExplicitId && $this->id !== '') {
-					$tokenizedHtml = str_replace($this->id, self::INSTANCE_ID_TOKEN, $tokenizedHtml);
+					$tokenizedHtml = str_replace($this->id, $idToken, $tokenizedHtml);
+				}
+
+				$filteredJsConfig = [];
+				foreach ($assetDiff['newJsConfig'] as $jsKey => $jsVal) {
+					$jsKeyStr = (string) $jsKey;
+					if (!in_array($jsKeyStr, self::BLOCKED_JS_CONFIG_KEYS, true)) {
+						$filteredJsConfig[$jsKeyStr] = $jsVal;
+					}
 				}
 
 				$cache->putComponentRender(static::class, $cacheKeyData, $tokenizedHtml, [
 					'scripts' => $assetDiff['newScripts'],
 					'styles' => $assetDiff['newStyles'],
-					'jsConfig' => $assetDiff['newJsConfig'],
+					'jsConfig' => $filteredJsConfig,
 					'stateTtlHours' => $this->capturedStateTtlHours,
+					'stateToken' => $stateToken,
+					'idToken' => $idToken,
 				]);
 
-				$html = $this->detokenizeRenderedHtml($tokenizedHtml, $this->capturedStateTtlHours);
+				$html = $this->detokenizeRenderedHtml($tokenizedHtml, $this->capturedStateTtlHours, $stateToken, $idToken);
 			} else {
-				$html = $this->detokenizeRenderedHtml($rawHtml, $this->capturedStateTtlHours);
+				$html = $this->detokenizeRenderedHtml($rawHtml, $this->capturedStateTtlHours, $stateToken, $idToken);
 			}
 
 			$this->afterRender($html);
