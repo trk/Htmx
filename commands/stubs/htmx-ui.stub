@@ -66,10 +66,15 @@ class {{className}} extends Ui
 	 */
 	protected function resolveShape(): array
 	{
-		$variant = (string) $this->parameters->get('variant', 'default');
-		$this->prependClass(['ui-{{slug}}', "ui-{{slug}}-{$variant}"]);
-
+		$variant = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $this->parameters->get('variant', 'default')) ?: 'default';
 		$shape = parent::resolveShape();
+		$baseClasses = 'ui-{{slug}} ui-{{slug}}-' . $variant;
+		$existingAttr = (string) ($shape['classAttr'] ?? '');
+		if ($existingAttr !== '' && str_starts_with($existingAttr, ' class="')) {
+			$shape['classAttr'] = ' class="' . $baseClasses . ' ' . substr($existingAttr, 8);
+		} else {
+			$shape['classAttr'] = ' class="' . $baseClasses . '"';
+		}
 		$shape['tag'] = (string) $this->parameters->get('tag', 'div');
 		return $shape;
 	}
@@ -81,7 +86,7 @@ class {{className}} extends Ui
 	 */
 	protected function compileTemplate(array $shape): string
 	{
-		$tag = (string) ($shape['tag'] ?? 'div');
+		$tag = self::sanitizeTagName((string) ($shape['tag'] ?? 'div'));
 		$open = self::compileOpenTag($tag, (string) ($shape['classAttr'] ?? ''));
 		$close = var_export("</{$tag}>", true);
 		$zoneMap = $shape['zoneMap'] ?? [];

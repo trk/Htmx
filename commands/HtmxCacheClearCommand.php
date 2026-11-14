@@ -11,8 +11,10 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Totoglu\Console\Traits\InteractWithProcessWire;
 use Totoglu\Htmx\Cache\HtmxCache;
 
+use function Laravel\Prompts\error;
 use function Laravel\Prompts\info;
 use function Laravel\Prompts\table;
+use function ProcessWire\wire;
 
 final class HtmxCacheClearCommand extends Command
 {
@@ -52,6 +54,16 @@ final class HtmxCacheClearCommand extends Command
 
 			$this->renderStatsTable($beforeStats);
 			return Command::SUCCESS;
+		}
+
+		$config = wire()->config;
+		if ($config && !empty($config->demo)) {
+			$msg = 'Write operations are disabled in demo mode.';
+			if ($asJson) {
+				return $this->outputJsonError($output, 'DEMO_MODE', $msg);
+			}
+			error($msg);
+			return Command::FAILURE;
 		}
 
 		if ($pruneOnly) {
@@ -100,16 +112,16 @@ final class HtmxCacheClearCommand extends Command
 	}
 
 	/**
-	 * @param array{enabled: bool, baseDir: string, uiClasses: int, uiFiles: int, componentClasses: int, componentFiles: int, bytes: int, hits: array{memory: int, opcache: int, schema: int, render: int, memo: int}, misses: array{ui: int, schema: int, render: int, memo: int}} $stats
+	 * @param array{enabled: bool, path: string, uiClasses: int, uiFiles: int, componentClasses: int, componentFiles: int, totalBytes: int} $stats
 	 */
 	private function renderStatsTable(array $stats): void
 	{
-		$kb = number_format($stats['bytes'] / 1024, 2);
+		$kb = number_format($stats['totalBytes'] / 1024, 2);
 		table(
 			['Metric', 'Value'],
 			[
 				['Cache Enabled', $stats['enabled'] ? 'Yes' : 'No'],
-				['Cache Directory', $stats['baseDir']],
+				['Cache Directory', $stats['path']],
 				['UI Classes / Shape Files', "{$stats['uiClasses']} class(es) / {$stats['uiFiles']} file(s)"],
 				['Component Classes / Cache Files', "{$stats['componentClasses']} class(es) / {$stats['componentFiles']} file(s)"],
 				['Total Disk Size', "{$kb} KB"],
