@@ -1,4 +1,4 @@
-<?php
+<?php // __(file-not-translatable)
 
 declare(strict_types=1);
 
@@ -748,6 +748,32 @@ describe('Ui Wire Integration, Multi-Language Memo, HtmxCache Isolation, Confine
 				->and($uiSource)->toContain('namespace Htmx\\Ui\\Cards;')
 				->and($uiSource)->toContain('class MetricTile extends Ui')
 				->and($uiSource)->toContain("public string \$name = 'metric-tile';");
+
+			// Verify --dry-run --json previews without creating files, and --json reports structured errors on collision
+			$statusDryRun = $uiTester->execute([
+				'name' => 'Cards/PreviewOnlyTile',
+				'--dir' => $relDir . '/ui',
+				'--dry-run' => true,
+				'--json' => true,
+			]);
+			$dryRunPayload = json_decode(trim($uiTester->getDisplay()), true);
+			expect($statusDryRun)->toBe(Command::SUCCESS)
+				->and(is_file($absDir . '/ui/Cards/PreviewOnlyTile.php'))->toBeFalse()
+				->and($dryRunPayload)->toBeArray()
+				->and($dryRunPayload['ok'] ?? null)->toBeTrue()
+				->and($dryRunPayload['data']['dryRun'] ?? null)->toBeTrue()
+				->and($dryRunPayload['data']['fqcn'] ?? null)->toBe('Htmx\\Ui\\Cards\\PreviewOnlyTile');
+
+			$statusCollisionJson = $uiTester->execute([
+				'name' => 'Cards/MetricTile',
+				'--dir' => $relDir . '/ui',
+				'--json' => true,
+			]);
+			$collisionPayload = json_decode(trim($uiTester->getDisplay()), true);
+			expect($statusCollisionJson)->toBe(Command::FAILURE)
+				->and($collisionPayload)->toBeArray()
+				->and($collisionPayload['ok'] ?? null)->toBeFalse()
+				->and($collisionPayload['error']['code'] ?? null)->toBe('ALREADY_EXISTS');
 		} finally {
 			if (is_dir($absDir)) {
 				wire()->files->rmdir($absDir, true);
