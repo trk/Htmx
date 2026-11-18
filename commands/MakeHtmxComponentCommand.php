@@ -9,13 +9,15 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use function Laravel\Prompts\error;
+use Totoglu\Console\Traits\InteractWithProcessWire;
 use function Laravel\Prompts\info;
 use function Laravel\Prompts\note;
 use function ProcessWire\wire;
 
 class MakeHtmxComponentCommand extends Command
 {
+	use InteractWithProcessWire;
+
 	protected string $commandName = 'make:htmx:component';
 	protected string $commandDescription = 'Scaffold a new Htmx Component.';
 	protected string $elementLabel = 'Component';
@@ -31,34 +33,35 @@ class MakeHtmxComponentCommand extends Command
 			->setName($this->commandName)
 			->setDescription($this->commandDescription)
 			->addArgument('name', InputArgument::REQUIRED, $this->argumentDescription)
-			->addOption('dir', 'd', InputOption::VALUE_REQUIRED, 'Relative path under site/ directory to store the element (overrides module settings)');
+			->addOption('dir', 'd', InputOption::VALUE_REQUIRED, 'Relative path under site/ directory to store the element (overrides module settings)')
+			->addOption('dry-run', null, InputOption::VALUE_NONE, 'Preview scaffolded class and path without writing files')
+			->addOption('json', null, InputOption::VALUE_NONE, 'Output structured JSON');
 	}
 
 	protected function execute(InputInterface $input, OutputInterface $output): int
 	{
+		$asJson = (bool) $input->getOption('json');
+		$dryRun = (bool) $input->getOption('dry-run');
+
 		$config = wire()->config;
 		if ($config && !empty($config->demo)) {
-			error('Write operations are disabled in demo mode.');
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'DEMO_MODE', 'Write operations are disabled in demo mode.');
 		}
 
 		$rawName = (string) $input->getArgument('name');
 		if (str_contains($rawName, '..') || str_contains($rawName, "\0")) {
-			error("Invalid {$this->elementLabel} name: path traversal sequences are not allowed.");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_NAME', "Invalid {$this->elementLabel} name: path traversal sequences are not allowed.");
 		}
 
 		$nameInput = trim(str_replace('\\', '/', $rawName), '/');
 		$parts = explode('/', $nameInput);
 		$className = (string) array_pop($parts);
 		if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $className) !== 1) {
-			error("Invalid {$this->elementLabel} class name '{$className}'.");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_CLASS_NAME', "Invalid {$this->elementLabel} class name '{$className}'.");
 		}
 		foreach ($parts as $segment) {
 			if ($segment === '' || preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $segment) !== 1) {
-				error("Invalid namespace segment '{$segment}'.");
-				return Command::FAILURE;
+				return $this->failCommand($output, $asJson, 'INVALID_NAMESPACE', "Invalid namespace segment '{$segment}'.");
 			}
 		}
 		$subDirs = implode('/', $parts);
@@ -81,14 +84,12 @@ class MakeHtmxComponentCommand extends Command
 
 		$baseDirStr = (string) $baseDir;
 		if ($baseDirStr === '' || str_contains($baseDirStr, "\0") || str_contains($baseDirStr, '\\')) {
-			error('Invalid target directory: path must point to a valid subdirectory inside site/.');
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_DIR', 'Invalid target directory: path must point to a valid subdirectory inside site/.');
 		}
 
 		foreach (explode('/', $baseDirStr) as $dirSegment) {
 			if ($dirSegment === '' || $dirSegment === '.' || $dirSegment === '..') {
-				error('Invalid target directory: path traversal sequences are not allowed.');
-				return Command::FAILURE;
+				return $this->failCommand($output, $asJson, 'INVALID_DIR', 'Invalid target directory: path traversal sequences are not allowed.');
 			}
 		}
 
@@ -97,8 +98,7 @@ class MakeHtmxComponentCommand extends Command
 		$targetFile = $targetDir . '/' . $className . '.php';
 
 		if (file_exists($targetFile)) {
-			error("{$this->elementLabel} '{$className}' already exists at {$targetFile}");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'ALREADY_EXISTS', "{$this->elementLabel} '{$className}' already exists at {$targetFile}");
 		}
 
 		$namespace = $this->rootNamespace;
@@ -109,9 +109,8 @@ class MakeHtmxComponentCommand extends Command
 		$slug = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '-$0', $className));
 
 		$realSitePath = realpath($sitePath);
-		if (!is_string($realSitePath) || $realSitePath === '') {
-			error('Invalid site directory.');
-			return Command::FAILURE;
+		if (!is_string($realSitePath)) {
+			return $this->failCommand($output, $asJson, 'INVALID_SITE_DIR', 'Invalid site directory.');
 		}
 		$sitePrefix = rtrim(str_replace('\\', '/', $realSitePath), '/') . '/';
 
@@ -132,20 +131,41 @@ class MakeHtmxComponentCommand extends Command
 			|| str_starts_with($normalizedProbe, $sitePrefix . 'assets/')
 			|| str_starts_with($normalizedProbe, $sitePrefix . 'modules/')
 		) {
-			error('Invalid target directory: path must remain inside a safe site/ subdirectory (excluding assets/ and modules/).');
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_DIR', 'Invalid target directory: path must remain inside a safe site/ subdirectory (excluding assets/ and modules/).');
 		}
 
 		$normalizedPlannedDir = rtrim(str_replace('\\', '/', $targetDir), '/') . '/';
 		$plannedRel = ltrim(substr($normalizedPlannedDir, strlen(rtrim(str_replace('\\', '/', $sitePath), '/') . '/')), '/');
 		if (str_starts_with($plannedRel, 'assets/') || str_starts_with($plannedRel, 'modules/')) {
-			error('Invalid target directory: writing inside site/assets/ or site/modules/ is not allowed.');
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_DIR', 'Invalid target directory: writing inside site/assets/ or site/modules/ is not allowed.');
+		}
+
+		$stubPath = __DIR__ . '/stubs/' . $this->stubFilename;
+		if (!file_exists($stubPath)) {
+			return $this->failCommand($output, $asJson, 'STUB_NOT_FOUND', "Stub file not found at {$stubPath}");
+		}
+
+		$relativeSiteTarget = 'site/' . ltrim(str_replace('\\', '/', substr($targetFile, strlen($sitePath))), '/');
+
+		if ($dryRun) {
+			if ($asJson) {
+				return $this->outputJsonSuccess($output, [
+					'element' => $this->elementLabel,
+					'className' => $className,
+					'namespace' => $namespace,
+					'fqcn' => $namespace . '\\' . $className,
+					'path' => $relativeSiteTarget,
+					'dryRun' => true,
+				]);
+			}
+
+			info("[Dry Run] Htmx {$this->elementLabel} '{$className}' would be scaffolded at:");
+			note($relativeSiteTarget);
+			return Command::SUCCESS;
 		}
 
 		if (!is_dir($targetDir) && !@mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
-			error('Failed to create target directory inside site/.');
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'DIR_CREATE_FAILED', 'Failed to create target directory inside site/.');
 		}
 
 		$realTargetDir = realpath($targetDir);
@@ -158,14 +178,7 @@ class MakeHtmxComponentCommand extends Command
 			|| str_starts_with($normalizedRealTarget, $sitePrefix . 'modules/')
 			|| is_link($targetFile)
 		) {
-			error('Invalid target directory: path must remain inside a safe site/ subdirectory (excluding assets/ and modules/).');
-			return Command::FAILURE;
-		}
-
-		$stubPath = __DIR__ . '/stubs/' . $this->stubFilename;
-		if (!file_exists($stubPath)) {
-			error("Stub file not found at {$stubPath}");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'INVALID_DIR', 'Invalid target directory: path must remain inside a safe site/ subdirectory (excluding assets/ and modules/).');
 		}
 
 		$content = (string) file_get_contents($stubPath);
@@ -177,8 +190,7 @@ class MakeHtmxComponentCommand extends Command
 
 		$fp = @fopen($targetFile, 'xb');
 		if ($fp === false) {
-			error("Target file already exists or could not be created safely at {$targetFile}");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'WRITE_FAILED', "Target file already exists or could not be created safely at {$targetFile}");
 		}
 		$writtenOk = false;
 		try {
@@ -191,12 +203,22 @@ class MakeHtmxComponentCommand extends Command
 		}
 		if (!$writtenOk) {
 			@unlink($targetFile);
-			error("Failed to write scaffolded {$this->elementLabel} file.");
-			return Command::FAILURE;
+			return $this->failCommand($output, $asJson, 'WRITE_FAILED', "Failed to write scaffolded {$this->elementLabel} file.");
+		}
+
+		if ($asJson) {
+			return $this->outputJsonSuccess($output, [
+				'element' => $this->elementLabel,
+				'className' => $className,
+				'namespace' => $namespace,
+				'fqcn' => $namespace . '\\' . $className,
+				'path' => $relativeSiteTarget,
+				'dryRun' => false,
+			]);
 		}
 
 		info("Htmx {$this->elementLabel} '{$className}' scaffolded successfully at:");
-		note(str_replace($sitePath, 'site/', $targetFile));
+		note($relativeSiteTarget);
 
 		return Command::SUCCESS;
 	}

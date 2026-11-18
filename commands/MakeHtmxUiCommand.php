@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Totoglu\Htmx\Commands;
 
-class MakeHtmxUiCommand extends MakeHtmxComponentCommand
+final class MakeHtmxUiCommand extends MakeHtmxComponentCommand
 {
 	protected string $commandName = 'make:htmx:ui';
 	protected string $commandDescription = 'Scaffold a new Htmx Ui element.';
