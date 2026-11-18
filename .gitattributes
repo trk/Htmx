@@ -1,8 +1,14 @@
 /.github export-ignore
 /docs export-ignore
-/tests export-ignore
 /GLOSSARY.md export-ignore
+/tests export-ignore
+/phpstan.neon export-ignore
+/phpunit.xml* export-ignore
+/.phpstan.cache export-ignore
+/.phpunit.cache export-ignore
+/.phpunit.result.cache export-ignore
+/test-results export-ignore
+/playwright-report export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
 .DS_Store export-ignore
-

@@ -1,48 +1,50 @@
 {
-  "name": "trk/processwire-htmx",
-  "description": "State-aware HTMX v4 module offering a native Request/Response API and server-driven components for ProcessWire.",
-  "type": "pw-module",
-  "keywords": [
-    "processwire",
-    "htmx",
-    "htmx4",
-    "state",
-    "component",
-    "morphdom",
-    "server-driven-ui"
-  ],
-  "homepage": "https://github.com/trk/Htmx",
-  "license": "MIT",
-  "authors": [
-    {
-      "name": "Iskender TOTOGLU",
-      "email": "iskender@totoglu.com",
-      "homepage": "https://totoglu.com/"
-    }
-  ],
-  "autoload": {
-    "psr-4": {
-      "Totoglu\\Htmx\\": "src/",
-      "Totoglu\\Htmx\\Commands\\": "commands/"
-    }
-  },
-  "extra": {
-    "processwire-console": {
-      "commands": [
-        "Totoglu\\Htmx\\Commands\\HtmxCacheClearCommand",
-        "Totoglu\\Htmx\\Commands\\MakeHtmxComponentCommand",
-        "Totoglu\\Htmx\\Commands\\MakeHtmxUiCommand"
-      ]
-    }
-  },
-  "require": {
-    "php": ">=8.4"
-  },
-  "config": {
-    "process-timeout": 0,
-    "allow-plugins": {
-      "hari/pw-module": true
-    }
-  },
-  "minimum-stability": "dev"
+	"name": "trk/processwire-htmx",
+	"description": "State-aware HTMX v4 module offering a native Request/Response API and server-driven components for ProcessWire.",
+	"type": "pw-module",
+	"keywords": [
+		"processwire",
+		"htmx",
+		"htmx4",
+		"state",
+		"component",
+		"morphdom",
+		"server-driven-ui"
+	],
+	"homepage": "https://github.com/trk/Htmx",
+	"license": "MIT",
+	"authors": [
+		{
+			"name": "Iskender TOTOGLU",
+			"email": "iskender@totoglu.com",
+			"homepage": "https://totoglu.com/"
+		}
+	],
+	"autoload": {
+		"psr-4": {
+			"Totoglu\\Htmx\\": "src/",
+			"Totoglu\\Htmx\\Commands\\": "commands/"
+		}
+	},
+	"extra": {
+		"processwire-console": {
+			"commands": [
+				"Totoglu\\Htmx\\Commands\\HtmxCacheClearCommand",
+				"Totoglu\\Htmx\\Commands\\MakeHtmxComponentCommand",
+				"Totoglu\\Htmx\\Commands\\MakeHtmxUiCommand"
+			]
+		}
+	},
+	"require": {
+		"php": ">=8.4"
+	},
+	"config": {
+		"process-timeout": 0,
+		"sort-packages": true,
+		"allow-plugins": {
+			"hari/pw-module": true
+		}
+	},
+	"minimum-stability": "dev",
+	"prefer-stable": true
 }

@@ -1,0 +1,10 @@
+parameters:
+	level: 8
+	phpVersion: 80400
+	bootstrapFiles:
+		- tests/phpstan-bootstrap.php
+	paths:
+		- Htmx.module.php
+		- src
+		- commands
+	treatPhpDocTypesAsCertain: false

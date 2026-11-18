@@ -2,5 +2,11 @@
 .DS_Store
 .idea
 .vscode
+.phpstan.cache
+.phpunit.cache
+.phpunit.result.cache
+node_modules/
 vendor/
 composer.lock
+test-results/
+playwright-report/
