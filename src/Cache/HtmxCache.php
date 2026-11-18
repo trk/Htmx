@@ -41,7 +41,7 @@ class HtmxCache extends WireData
 	private array $componentSchemas = [];
 
 	/**
-	 * @var array<class-string, array{short: string, file: string, mtime: int}> Cached source metadata per class
+	 * @var array<class-string, array{short: string, nsTag: string, file: string, mtime: int}> Cached source metadata per class
 	 */
 	private array $sourceMetaCache = [];
 
@@ -74,7 +74,7 @@ class HtmxCache extends WireData
 	 */
 	public static function resolve(?Htmx $htmx = null): ?self
 	{
-		if ($htmx !== null && isset($htmx->cache) && $htmx->cache instanceof self) {
+		if ($htmx !== null && isset($htmx->cache)) {
 			return $htmx->cache;
 		}
 		try {
@@ -83,7 +83,7 @@ class HtmxCache extends WireData
 				return $cache;
 			}
 			$resolvedHtmx = wire('htmx');
-			if ($resolvedHtmx instanceof Htmx && isset($resolvedHtmx->cache) && $resolvedHtmx->cache instanceof self) {
+			if ($resolvedHtmx instanceof Htmx && isset($resolvedHtmx->cache)) {
 				return $resolvedHtmx->cache;
 			}
 		} catch (\Throwable) {
@@ -125,7 +125,7 @@ class HtmxCache extends WireData
 			return $this->customBasePath;
 		}
 
-		$config = $this->wire()?->config ?? wire()?->config;
+		$config = $this->wire()->config;
 		$cacheRoot = $config && isset($config->paths->cache) ? (string) $config->paths->cache : sys_get_temp_dir() . '/pw-htmx-cache/';
 		return rtrim(str_replace('\\', '/', $cacheRoot), '/') . '/Htmx/';
 	}
@@ -178,7 +178,7 @@ class HtmxCache extends WireData
 	 */
 	public function resolveSourceMeta(string $class): array
 	{
-		$config = $this->wire()?->config ?? wire()?->config;
+		$config = $this->wire()->config;
 		$isDebug = (bool) ($config->debug ?? false);
 
 		if (!$isDebug && isset($this->sourceMetaCache[$class])) {
@@ -754,7 +754,7 @@ class HtmxCache extends WireData
 		string $contents,
 		string $nsTag = ''
 	): void {
-		$config = $this->wire()?->config ?? wire()?->config;
+		$config = $this->wire()->config;
 		$chmodDir = ($config && is_string($config->chmodDir) && $config->chmodDir !== '')
 			? (int) octdec($config->chmodDir)
 			: 0755;

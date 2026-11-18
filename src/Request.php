@@ -89,14 +89,14 @@ class Request extends Wire
 	/**
 	 * Cached decoded JSON body when request `Content-Type` is `application/json`.
 	 *
-	 * @var array<string, mixed>|null
+	 * @var array<int|string, mixed>|null
 	 */
 	private ?array $jsonBody = null;
 
 	/**
 	 * Cached decoded `application/x-www-form-urlencoded` body on non-`POST` verbs (`PUT`, `PATCH`, `DELETE`, `QUERY`).
 	 *
-	 * @var array<string, mixed>|null
+	 * @var array<int|string, mixed>|null
 	 */
 	private ?array $formBody = null;
 
@@ -282,7 +282,7 @@ class Request extends Wire
 		$baseMethod = '';
 		if ($this->methodOverride !== null) {
 			$baseMethod = strtoupper(trim($this->methodOverride));
-		} elseif ($input !== null && method_exists($input, 'requestMethod')) {
+		} elseif ($input !== null) {
 			try {
 				$pwMethod = strtoupper(trim((string) $input->requestMethod()));
 				if ($pwMethod !== '') {
@@ -609,7 +609,7 @@ class Request extends Wire
 	public function uri(): string
 	{
 		$input = $this->wireInput();
-		if ($input !== null && method_exists($input, 'url')) {
+		if ($input !== null) {
 			try {
 				return (string) $input->url(true);
 			} catch (\Throwable) {
@@ -645,7 +645,7 @@ class Request extends Wire
 	 * Parse and return the decoded JSON request body as an associative array.
 	 * Returns an empty array when a state-mutating request is blocked by ProcessWire demo mode (`$config->demo = true`).
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	public function json(): array
 	{
@@ -717,7 +717,7 @@ class Request extends Wire
 	 * Decode bounded `application/x-www-form-urlencoded` request bodies sent via `php://input`
 	 * on non-`POST` HTTP verbs (`PUT`, `PATCH`, `DELETE`, `QUERY`) where PHP SAPI leaves `$_POST` empty.
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	private function decodeRawFormBody(): array
 	{
@@ -753,13 +753,13 @@ class Request extends Wire
 
 		$parsed = [];
 		parse_str($raw, $parsed);
-		$this->formBody = is_array($parsed) ? $this->sanitizeJsonTree($parsed) : [];
+		$this->formBody = $this->sanitizeJsonTree($parsed);
 
 		return $this->formBody;
 	}
 
 	/**
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	private function decodeRawJson(): array
 	{
@@ -817,7 +817,7 @@ class Request extends Wire
 		}
 
 		$input = $this->wireInput();
-		if ($input !== null && method_exists($input, 'requestMethod')) {
+		if ($input !== null) {
 			try {
 				$detected = strtoupper(trim((string) $input->requestMethod()));
 				if ($detected !== '') {
@@ -861,7 +861,7 @@ class Request extends Wire
 	/**
 	 * Return decoded body parameters sent with an HTMX v4 `QUERY` HTTP request without mutating `$input->post`.
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	public function queryBody(): array
 	{
@@ -982,6 +982,8 @@ class Request extends Wire
 	 * ProcessWire sanitizers, whitelists, callbacks, and fallback values.
 	 *
 	 * When `$key` is omitted or `null`, returns the full POST parameter array.
+	 *
+	 * @param array<int|string, mixed>|string|int|callable|null $valid
 	 */
 	public function post(?string $key = null, array|string|int|callable|null $valid = null, mixed $fallback = null): mixed
 	{
@@ -1038,6 +1040,7 @@ class Request extends Wire
 	 * When `$key` is omitted, `null`, or `''`, returns the full GET parameter array.
 	 *
 	 * @param string|null $key
+	 * @param array<int|string, mixed>|string|int|callable|null $valid
 	 */
 	public function get(?string $key = '', array|string|int|callable|null $valid = null, mixed $fallback = null): mixed
 	{
@@ -1071,7 +1074,7 @@ class Request extends Wire
 	 *
 	 * Returns an empty array when a state-mutating request is blocked by ProcessWire demo mode (`$config->demo = true`).
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	public function postArray(): array
 	{
@@ -1148,7 +1151,7 @@ class Request extends Wire
 	/**
 	 * Return all GET parameters as an associative array via `WireInput::$get`.
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	public function getArray(): array
 	{
@@ -1170,7 +1173,7 @@ class Request extends Wire
 	 *
 	 * In ProcessWire demo mode (`$config->demo = true`), mutating POST and JSON input is excluded.
 	 *
-	 * @return array<string, mixed>
+	 * @return array<int|string, mixed>
 	 */
 	public function all(): array
 	{
@@ -1187,7 +1190,7 @@ class Request extends Wire
 	 */
 	public function pageNumber(string $pageName = 'page'): int
 	{
-		$maxPageNum = max(1, (int) ($this->wire()?->config?->maxPageNum ?: 999));
+		$maxPageNum = max(1, (int) ($this->wire()->config->maxPageNum ?: 999));
 		$val = $this->input($pageName);
 		if (is_int($val)) {
 			return $val >= 1 ? min($val, $maxPageNum) : 1;
@@ -1206,7 +1209,7 @@ class Request extends Wire
 		}
 
 		$input = $this->wireInput();
-		if ($input !== null && method_exists($input, 'pageNum')) {
+		if ($input !== null) {
 			$pageNum = (int) $input->pageNum();
 			if ($pageNum >= 1) {
 				return min($pageNum, $maxPageNum);
@@ -1219,6 +1222,8 @@ class Request extends Wire
 	/**
 	 * Retrieve a specific input value (supporting dot-notation for nested arrays)
 	 * with optional ProcessWire `$sanitizer` method, whitelist array, or callable.
+	 *
+	 * @param array<int|string, mixed>|string|int|callable|null $sanitizer
 	 */
 	public function input(?string $key = null, mixed $default = null, array|string|int|callable|null $sanitizer = null): mixed
 	{
@@ -1250,6 +1255,8 @@ class Request extends Wire
 
 	/**
 	 * Apply a ProcessWire `Sanitizer` method (or CSV chain), whitelist array, integer toggle, or callable to a resolved input value.
+	 *
+	 * @param array<int|string, mixed>|string|int|callable|null $sanitizer
 	 */
 	protected function applySanitizer(mixed $value, array|string|int|callable|null $sanitizer, mixed $fallback = null): mixed
 	{
@@ -1289,12 +1296,12 @@ class Request extends Wire
 			return $fallback;
 		}
 
-		$pwSanitizer = $this->wire()?->sanitizer;
-		if ($pwSanitizer === null) {
+		$pwSanitizer = $this->wire()->sanitizer;
+		if (!$pwSanitizer instanceof \ProcessWire\Sanitizer) {
 			return $fallback;
 		}
 
-		$allSanitizers = method_exists($pwSanitizer, 'getAll') ? $pwSanitizer->getAll(true) : [];
+		$allSanitizers = $pwSanitizer->getAll(true);
 		$current = $value;
 
 		foreach (explode(',', $sanitizer) as $method) {
@@ -1433,7 +1440,8 @@ class Request extends Wire
 				$lookup[$key] = true;
 			}
 		}
-		$csrf = $this->wire()->session?->CSRF;
+		$session = $this->wire()->session;
+		$csrf = $session ? $session->CSRF : null;
 		if (is_object($csrf) && method_exists($csrf, 'getTokenName')) {
 			$tokenName = (string) $csrf->getTokenName();
 			if ($tokenName !== '' && $this->isSafeInputKey($tokenName)) {
@@ -1649,12 +1657,10 @@ class Request extends Wire
 
 		if (function_exists('getallheaders')) {
 			$rawHeaders = @getallheaders();
-			if (is_array($rawHeaders)) {
-				foreach ($rawHeaders as $k => $v) {
-					if (is_string($k) && stripos($k, 'HX-') === 0 && is_scalar($v)) {
-						$shortKey = strtolower(substr($k, 3));
-						$result[$shortKey] = (string) $v;
-					}
+			foreach ($rawHeaders as $k => $v) {
+				if (is_string($k) && stripos($k, 'HX-') === 0 && is_scalar($v)) {
+					$shortKey = strtolower(substr($k, 3));
+					$result[$shortKey] = (string) $v;
 				}
 			}
 		}
@@ -1802,7 +1808,7 @@ class Request extends Wire
 
 		if (function_exists('getallheaders')) {
 			$headers = @getallheaders();
-			if (is_array($headers) && $headers !== []) {
+			if ($headers !== []) {
 				foreach ($headers as $k => $v) {
 					if (
 						is_string($k)

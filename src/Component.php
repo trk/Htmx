@@ -126,7 +126,7 @@ abstract class Component extends WireData
 	protected ?Htmx $htmx = null;
 
 	/**
-	 * @var array<class-string, ReflectionClass> Local reflection cache per class hierarchy
+	 * @var array<class-string, ReflectionClass<object>> Local reflection cache per class hierarchy
 	 */
 	private static array $reflectionCache = [];
 
@@ -215,15 +215,24 @@ abstract class Component extends WireData
 	}
 
 	/**
+	 * Helper to get or cache the ReflectionClass for a class name.
+	 *
+	 * @param class-string $class
+	 * @return ReflectionClass<object>
+	 */
+	private static function resolveClassReflection(string $class): ReflectionClass
+	{
+		return self::$reflectionCache[$class] ??= new ReflectionClass($class);
+	}
+
+	/**
 	 * Helper to get or cache the ReflectionClass for this instance's class.
+	 *
+	 * @return ReflectionClass<object>
 	 */
 	protected static function getReflection(): ReflectionClass
 	{
-		$class = static::class;
-		if (!isset(self::$reflectionCache[$class])) {
-			self::$reflectionCache[$class] = new ReflectionClass($class);
-		}
-		return self::$reflectionCache[$class];
+		return self::resolveClassReflection(static::class);
 	}
 
 	/**
@@ -274,7 +283,7 @@ abstract class Component extends WireData
 	 */
 	protected static function buildReflectionSchema(string $class): array
 	{
-		$ref = self::$reflectionCache[$class] ??= new ReflectionClass($class);
+		$ref = self::resolveClassReflection($class);
 
 		$properties = [];
 		foreach ($ref->getProperties(ReflectionProperty::IS_PUBLIC) as $prop) {
@@ -298,7 +307,7 @@ abstract class Component extends WireData
 
 		$actions = [];
 		$actionMap = [];
-		$baseRef = self::$reflectionCache[self::class] ??= new ReflectionClass(self::class);
+		$baseRef = self::resolveClassReflection(self::class);
 
 		foreach ($ref->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
 			$methodName = $method->getName();
@@ -331,7 +340,8 @@ abstract class Component extends WireData
 						} elseif (isset(self::PW_FUEL_CLASS_MAP[$typeName])) {
 							$pwApiVar = self::PW_FUEL_CLASS_MAP[$typeName];
 						} elseif (str_starts_with($typeName, 'ProcessWire\\')) {
-							$shortName = substr(strrchr('\\' . $typeName, '\\'), 1);
+							$lastSlash = strrchr('\\' . $typeName, '\\');
+							$shortName = $lastSlash !== false ? substr($lastSlash, 1) : $typeName;
 							$pwApiVar = strtolower($shortName);
 						}
 					}
@@ -730,18 +740,18 @@ abstract class Component extends WireData
 
 		$payload = $request !== null
 			? ($request->post($this->stateKey) ?? $request->queryParam($this->stateKey))
-			: $input?->post($this->stateKey);
+			: ($input !== null ? $input->post($this->stateKey) : null);
 		if ($payload === null || $payload === '' || $payload === false) {
-			$payload = $request !== null ? $request->get($this->stateKey) : $input?->get($this->stateKey);
+			$payload = $request !== null ? $request->get($this->stateKey) : ($input !== null ? $input->get($this->stateKey) : null);
 		}
 
 		if ($payload === null || $payload === '' || $payload === false) {
 			$postBag = $request !== null
 				? $request->statePostArray()
-				: (is_object($input?->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : []);
+				: ($input !== null && is_object($input->post) && method_exists($input->post, 'getArray') ? $input->post->getArray() : []);
 			$getBag = $request !== null
 				? $request->getArray()
-				: (is_object($input?->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : []);
+				: ($input !== null && is_object($input->get) && method_exists($input->get, 'getArray') ? $input->get->getArray() : []);
 
 			$anyStatePresent = false;
 			$inspected = 0;
@@ -782,7 +792,7 @@ abstract class Component extends WireData
 
 			$actionCandidate = $request !== null
 				? ($request->post('__htmx_action') ?? $request->queryParam('__htmx_action') ?? $request->get('__htmx_action'))
-				: ($input?->post('__htmx_action') ?? $input?->get('__htmx_action'));
+				: ($input !== null ? ($input->post('__htmx_action') ?? $input->get('__htmx_action')) : null);
 			if (is_string($actionCandidate) && $actionCandidate !== '') {
 				return false;
 			}
@@ -832,12 +842,12 @@ abstract class Component extends WireData
 
 			$payload = $request !== null
 				? ($request->post($this->stateKey) ?? $request->queryParam($this->stateKey))
-				: $input?->post($this->stateKey);
+				: ($input !== null ? $input->post($this->stateKey) : null);
 
 			// HTMX v4: allow GET-carried state for HX-Partial / HX-Request-Type: partial requests,
 			// as well as HX-Boost (full page) navigations and query* actions.
 			if ($payload === null || $payload === '' || $payload === false) {
-				$getPayload = $request !== null ? $request->get($this->stateKey) : $input?->get($this->stateKey);
+				$getPayload = $request !== null ? $request->get($this->stateKey) : ($input !== null ? $input->get($this->stateKey) : null);
 				if ($getPayload !== null && $getPayload !== '' && $getPayload !== false) {
 					$payload = $getPayload;
 				}
@@ -872,7 +882,7 @@ abstract class Component extends WireData
 			if ((!is_string($payload) || $payload === '') && $this->stateKey !== 'hx__state') {
 				$fallback = $request !== null
 					? ($request->post('hx__state') ?? $request->queryParam('hx__state') ?? $request->get('hx__state'))
-					: ($input?->post('hx__state') ?? $input?->get('hx__state'));
+					: ($input !== null ? ($input->post('hx__state') ?? $input->get('hx__state')) : null);
 				if (is_string($fallback) && $fallback !== '') {
 					try {
 						$candDecoded = $this->decodeMatchingCandidate($fallback, $this->getHmacSalt());
@@ -1056,38 +1066,38 @@ abstract class Component extends WireData
 
 		$method = $request !== null
 			? $request->rawMethod()
-			: strtoupper((string) ($input?->requestMethod() ?: 'GET'));
+			: strtoupper((string) (($input !== null ? $input->requestMethod() : '') ?: 'GET'));
 		$isMutatingVerb = in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true);
 		$isDeleteMethod = ($method === 'DELETE');
 		$isQueryMethod = ($method === 'QUERY');
 
 		$readActionParam = static function (string $paramName) use ($request, $input, $isMutatingVerb, $isDeleteMethod, $isQueryMethod): mixed {
 			if ($isMutatingVerb && !$isDeleteMethod) {
-				return $request !== null ? $request->post($paramName) : $input?->post($paramName);
+				return $request !== null ? $request->post($paramName) : ($input !== null ? $input->post($paramName) : null);
 			}
 			if ($isDeleteMethod) {
-				$postVal = $request !== null ? $request->post($paramName) : $input?->post($paramName);
+				$postVal = $request !== null ? $request->post($paramName) : ($input !== null ? $input->post($paramName) : null);
 				if ($postVal !== null && $postVal !== '') {
 					return $postVal;
 				}
-				return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+				return $request !== null ? $request->get($paramName) : ($input !== null ? $input->get($paramName) : null);
 			}
 			if ($isQueryMethod) {
-				$queryVal = $request?->queryParam($paramName);
+				$queryVal = $request !== null ? $request->queryParam($paramName) : null;
 				if ($queryVal !== null && $queryVal !== '') {
 					return $queryVal;
 				}
-				return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+				return $request !== null ? $request->get($paramName) : ($input !== null ? $input->get($paramName) : null);
 			}
-			return $request !== null ? $request->get($paramName) : $input?->get($paramName);
+			return $request !== null ? $request->get($paramName) : ($input !== null ? $input->get($paramName) : null);
 		};
 
 		$action = $readActionParam($actionParam);
-		if ((!$action || !is_string($action)) && $actionParam !== '__htmx_action') {
+		if ((!is_string($action) || $action === '') && $actionParam !== '__htmx_action') {
 			$action = $readActionParam('__htmx_action');
 		}
 
-		if (!$action || !is_string($action) || $action === '') {
+		if (!is_string($action) || $action === '') {
 			return false;
 		}
 
@@ -1165,7 +1175,7 @@ abstract class Component extends WireData
 					if (is_int($rawVal) || (is_string($rawVal) && ctype_digit(trim($rawVal)))) {
 						$pageId = (int) $rawVal;
 						if ($pageId > 0) {
-							$loadedPage = $this->wire()->pages?->get($pageId);
+							$loadedPage = $this->wire()->pages->get($pageId);
 							if (
 								$loadedPage instanceof Page
 								&& $loadedPage->id > 0
@@ -1452,8 +1462,7 @@ abstract class Component extends WireData
 						$safePages = $pages->newPageArray();
 						foreach ($foundPages as $foundPage) {
 							if (
-								$foundPage instanceof Page
-								&& $foundPage->id > 0
+								$foundPage->id > 0
 								&& !($foundPage instanceof User)
 								&& !$foundPage->isTrash()
 								&& (!$foundPage->isUnpublished() || $foundPage->editable())
@@ -1646,7 +1655,7 @@ abstract class Component extends WireData
 			} elseif ($propVal instanceof PageArray && $propVal->count() > 0) {
 				$items = [];
 				foreach ($propVal as $item) {
-					if ($item instanceof Page && $item->id > 0) {
+					if ($item->id > 0) {
 						$items[] = $item->id . ':' . (int) $item->modified . ':' . (int) $item->status;
 					}
 				}
@@ -1657,17 +1666,17 @@ abstract class Component extends WireData
 		$langId = 0;
 		$authScope = 'guest';
 		$user = $this->wire()->user;
-		if ($user) {
+		if ($user instanceof User) {
 			if (isset($user->language) && is_object($user->language) && isset($user->language->id)) {
 				$langId = (int) $user->language->id;
 			}
-			if (method_exists($user, 'isLoggedin') && $user->isLoggedin() && isset($user->id)) {
+			if ($user->isLoggedin() && $user->id > 0) {
 				$authScope = 'u:' . (int) $user->id;
 			}
 		}
 
 		$config = $this->wire()->config;
-		$schemeHost = (($config?->https ?? false) ? 'https://' : 'http://') . strtolower((string) ($config?->httpHost ?? ''));
+		$schemeHost = ($config->https ? 'https://' : 'http://') . strtolower((string) $config->httpHost);
 
 		return [
 			'state' => $state,
@@ -1675,7 +1684,7 @@ abstract class Component extends WireData
 			'stateKey' => $this->stateKey,
 			'endpoint' => $this->requestUrl(),
 			'host' => $schemeHost,
-			'demo' => (bool) ($config?->demo ?? false),
+			'demo' => (bool) $config->demo,
 			'lang' => $langId,
 			'auth' => $authScope,
 			'view' => is_string($this->view) ? $this->view : null,

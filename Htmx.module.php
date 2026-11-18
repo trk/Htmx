@@ -31,7 +31,7 @@ use Totoglu\Htmx\State\SignedStateCodec;
  * @property bool   $tracySupport           Enable Tracy debug bar panel and X-PW-HTMX-* headers in debug mode?
  * @property bool   $cacheEnabled           Enable HtmxCache compilation?
  * @property int    $cacheMaxShapesPerClass Maximum compiled UI shape variants retained per UI class
- * @property array  $extensions             Enabled HTMX v4 extensions (hx-ws, hx-sse, hx-preload, etc.)
+ * @property list<string> $extensions       Enabled HTMX v4 extensions (hx-ws, hx-sse, hx-preload, etc.)
  * @method bool shouldInterceptPageRender(Page $page) Determine whether Htmx should intercept rendering for the given page.
  *
  * @author Iskender TOTOGLU, @ukyo (community), @trk (GitHub)
@@ -223,7 +223,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 				}
 			}
 
-			if ($session !== null && method_exists($session, 'getFor') && method_exists($session, 'setFor')) {
+			if ($session instanceof Session) {
 				$stored = $session->getFor('_htmx', 'assetConfigToken');
 				if (is_string($stored) && strlen($stored) === 32 && ctype_xdigit($stored)) {
 					$this->assetConfigToken = $stored;
@@ -275,7 +275,9 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 		$this->wire()->addHookBefore('Modules::saveConfig', function (HookEvent $e): void {
 			$target = $e->arguments(0);
-			$name = is_object($target) ? $target->className() : (string) $target;
+			$name = $target instanceof Wire
+				? $target->className()
+				: (is_object($target) ? (new \ReflectionClass($target))->getShortName() : (string) $target);
 			if ($name !== 'Htmx' && !str_ends_with($name, '\\Htmx')) {
 				return;
 			}
@@ -429,8 +431,9 @@ class Htmx extends WireData implements Module, ConfigurableModule
 									$xpath = new \DOMXPath($dom);
 									$safeId = htmlspecialchars($targetId, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 									$nodes = $xpath->query("//*[@id=\"{$safeId}\"]");
-									if ($nodes && $nodes->length > 0 && $nodes->item(0) !== null) {
-										$extracted = $dom->saveHTML($nodes->item(0));
+									$firstNode = ($nodes && $nodes->length > 0) ? $nodes->item(0) : null;
+									if ($firstNode instanceof \DOMNode) {
+										$extracted = $dom->saveHTML($firstNode);
 										if (is_string($extracted)) {
 											$html = $extracted;
 										}
@@ -520,7 +523,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 			'configToken' => $this->getAssetConfigToken(),
 		], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_INVALID_UTF8_SUBSTITUTE);
 
-		if (!is_string($csrfPayload) || $csrfPayload === '') {
+		if (!is_string($csrfPayload)) {
 			return '';
 		}
 
@@ -536,35 +539,31 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		try {
 			$wire = $this->wire();
 			$notices = $wire->notices;
-			if ($notices) {
-				$visible = method_exists($notices, 'getVisible') ? $notices->getVisible() : $notices;
-				if (is_iterable($visible)) {
-					foreach ($visible as $n) {
-						if (!is_object($n)) {
-							continue;
-						}
-						$text = trim((string) ($n->text ?? ''));
-						if ($text === '') {
-							continue;
-						}
-						$allowMarkup = isset($n->flags) && (((int) $n->flags & Notice::allowMarkup) !== 0);
-						if (!$allowMarkup && (str_contains($text, '<') || str_contains($text, '>')) && $wire->sanitizer !== null) {
-							$text = $wire->sanitizer->entities($text);
-						}
-						$type = 'message';
-						$className = get_class($n);
-						if (str_contains($className, 'Error')) {
-							$type = 'error';
-						} elseif (str_contains($className, 'Warning')) {
-							$type = 'warning';
-						}
-						$flash[] = ['type' => $type, 'text' => $text];
+			if ($notices instanceof Notices) {
+				$visible = $notices->getVisible();
+				foreach ($visible as $n) {
+					if (!is_object($n)) {
+						continue;
 					}
+					$text = trim((string) ($n->text ?? ''));
+					if ($text === '') {
+						continue;
+					}
+					$allowMarkup = isset($n->flags) && (((int) $n->flags & Notice::allowMarkup) !== 0);
+					if (!$allowMarkup && (str_contains($text, '<') || str_contains($text, '>')) && $wire->sanitizer !== null) {
+						$text = $wire->sanitizer->entities($text);
+					}
+					$type = 'message';
+					$className = get_class($n);
+					if (str_contains($className, 'Error')) {
+						$type = 'error';
+					} elseif (str_contains($className, 'Warning')) {
+						$type = 'warning';
+					}
+					$flash[] = ['type' => $type, 'text' => $text];
 				}
-				$wire->session?->removeNotices();
-				if (method_exists($notices, 'removeAll')) {
-					$notices->removeAll();
-				}
+				$wire->session->removeNotices();
+				$notices->removeAll();
 			}
 		} catch (\Throwable) {
 		}
@@ -914,10 +913,6 @@ class Htmx extends WireData implements Module, ConfigurableModule
 	{
 		try {
 			$bar = \Tracy\Debugger::getBar();
-			if (!$bar) {
-				return;
-			}
-
 			$bar->addPanel(new HtmxTracyPanel(function (): array {
 				return $this->getTracyPanelData();
 			}));
@@ -1106,7 +1101,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		} catch (WireCSRFException | WirePermissionException $secEx) {
 			throw $secEx;
 		} catch (\Throwable $e) {
-			$this->wire()->log?->error(
+			$this->wire()->log->error(
 				'HTMX Component Lifecycle Error (' . $class . '): ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine()
 			);
 			if ($config && $config->debug) {
@@ -1272,7 +1267,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		$port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
 		$hostWithPort = $host . $port;
 
-		$resolvedConfig = $config ?? wire()?->config;
+		$resolvedConfig = $config ?? wire()->config;
 		if (!$resolvedConfig instanceof Config) {
 			return false;
 		}
@@ -1337,7 +1332,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		];
 
 		$json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_INVALID_UTF8_SUBSTITUTE);
-		if (!is_string($json) || $json === '') {
+		if (!is_string($json)) {
 			return '';
 		}
 
@@ -1525,7 +1520,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 			'hx-head'              => $this->_('Head Merge — Merge <head> tags during swaps.'),
 			'hx-preload'           => $this->_('Preload — Background link preloading.'),
 			'hx-targets'           => $this->_('Response Targets — Swap to multiple targets at once.'),
-			'hx-prompt'            => $this->_('Prompt — Legacy hx-prompt compatibility layer.'),
+			'hx-prompt'            => $this->_('Prompt — Interactive prompt dialog support.'),
 			'hx-csp'               => $this->_('CSP — Nonce-based Content Security Policy support.'),
 			'hx-alpine-compat'     => $this->_('Alpine Compat — Alpine.js interop helper.'),
 			'hx-multipart'         => $this->_('Multipart — Robust file upload encoding helper.'),
@@ -1567,8 +1562,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 			isset($this->request)
 			&& !$this->request->isDemoMode()
 			&& $this->request->isPost()
-			&& $user !== null
-			&& method_exists($user, 'isSuperuser')
+			&& $user instanceof User
 			&& $user->isSuperuser()
 			&& $this->request->validateCsrf(false)
 		) {
@@ -2023,7 +2017,7 @@ class Htmx extends WireData implements Module, ConfigurableModule
 		}
 
 		$config = $this->wire()->config;
-		$adminUrl = (string) ($config?->urls?->admin ?: ($config?->urls?->get('admin') ?: ''));
+		$adminUrl = (string) ($config->urls->admin ?: ($config->urls->get('admin') ?: ''));
 		if ($adminUrl !== '' && isset($this->request)) {
 			$uriPath = (string) (parse_url($this->request->uri(), PHP_URL_PATH) ?? '');
 			$adminPrefix = '/' . trim($adminUrl, '/') . '/';
@@ -2038,13 +2032,15 @@ class Htmx extends WireData implements Module, ConfigurableModule
 
 	public function ___install(): void
 	{
-		$this->wire()?->cache?->delete('htmx.module-components');
+		$this->wire()->cache->delete('htmx.module-components');
 	}
 
 	public function ___uninstall(): void
 	{
 		$wire = $this->wire();
-		$cacheInstance = isset($this->cache) ? $this->cache : new HtmxCache();
+		$cacheInstance = (new \ReflectionProperty($this, 'cache'))->isInitialized($this)
+			? $this->cache
+			: new HtmxCache();
 		if ($wire instanceof ProcessWire) {
 			$wire->wire($cacheInstance);
 		}

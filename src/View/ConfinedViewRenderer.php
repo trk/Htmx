@@ -98,7 +98,7 @@ final class ConfinedViewRenderer
 		}
 
 		$realFile = realpath($file);
-		if (!is_string($realFile) || $realFile === '') {
+		if (!is_string($realFile)) {
 			return '';
 		}
 
@@ -106,7 +106,7 @@ final class ConfinedViewRenderer
 		$isWithinAllowed = false;
 		foreach ($allowedDirs as $allowedDir) {
 			$realDir = realpath((string) $allowedDir);
-			if (is_string($realDir) && $realDir !== '') {
+			if (is_string($realDir)) {
 				$prefix = rtrim(str_replace('\\', '/', $realDir), '/') . '/';
 				if (str_starts_with($normalizedFile, $prefix)) {
 					$isWithinAllowed = true;

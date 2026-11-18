@@ -109,7 +109,7 @@ class AttributeBag extends ParameterBag
 
 		if ($force === true || ($force === null && !$hasClass)) {
 			$this->addClass($class);
-		} elseif ($force === false || ($force === null && $hasClass)) {
+		} elseif ($force === false || $hasClass) {
 			$this->removeClass($class);
 		}
 
@@ -346,7 +346,7 @@ class AttributeBag extends ParameterBag
 		$port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
 		$hostWithPort = $host . $port;
 
-		$config = wire()?->config;
+		$config = wire()->config;
 		if (!$config instanceof Config) {
 			return '/';
 		}

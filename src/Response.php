@@ -201,7 +201,7 @@ class Response extends WireData
 		$port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
 		$hostWithPort = $host . $port;
 
-		$config = $this->wire()?->config;
+		$config = $this->wire()->config;
 		if ($config === null) {
 			return '/';
 		}

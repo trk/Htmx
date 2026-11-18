@@ -8,6 +8,8 @@ namespace Totoglu\Htmx\Bag;
  * ParameterBag
  *
  * An Object-Oriented wrapper for an array of parameters.
+ *
+ * @implements \IteratorAggregate<string, mixed>
  */
 class ParameterBag implements \Countable, \IteratorAggregate
 {
@@ -47,6 +49,9 @@ class ParameterBag implements \Countable, \IteratorAggregate
 		return count($this->parameters);
 	}
 
+	/**
+	 * @return \Traversable<string, mixed>
+	 */
 	public function getIterator(): \Traversable
 	{
 		return new \ArrayIterator($this->parameters);

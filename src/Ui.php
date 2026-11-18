@@ -20,6 +20,8 @@ use Totoglu\Htmx\Cache\HtmxCache;
  * Provides fluent manipulation of ParameterBag and AttributeBag, the complete
  * HTMX v4 attribute helper suite, component-specific Zone/Slot composition,
  * Value Gate short-circuiting, and two-phase Shape Compilation via HtmxCache.
+ *
+ * @phpstan-consistent-constructor
  */
 abstract class Ui extends Wire
 {
@@ -142,7 +144,7 @@ abstract class Ui extends Wire
 		if ($wire instanceof ProcessWire) {
 			$wire->wire($instance);
 		}
-		$htmx = $instance->wire()?->htmx;
+		$htmx = $instance->wire()->htmx;
 		$instance->htmx = $htmx instanceof Htmx ? $htmx : null;
 
 		return $instance;
@@ -159,7 +161,7 @@ abstract class Ui extends Wire
 		if ($wire instanceof ProcessWire) {
 			$wire->wire($this);
 		}
-		$htmx = $this->wire()?->htmx;
+		$htmx = $this->wire()->htmx;
 		$this->htmx = $htmx instanceof Htmx ? $htmx : null;
 
 		$this->parameters = $parameters instanceof ParameterBag
@@ -282,8 +284,9 @@ abstract class Ui extends Wire
 		foreach ($this->zonePlacements as $z => $items) {
 			$idx = array_search($item, $items, true);
 			if ($idx !== false) {
-				unset($this->zonePlacements[$z][$idx]);
-				$this->zonePlacements[$z] = array_values($this->zonePlacements[$z]);
+				$updated = $items;
+				unset($updated[$idx]);
+				$this->zonePlacements[$z] = array_values($updated);
 			}
 		}
 
@@ -1022,7 +1025,8 @@ abstract class Ui extends Wire
 		try {
 			$func = '\ProcessWire\__';
 			if (function_exists($func)) {
-				return (string) $func($text, $textdomain);
+				$translated = $func($text, $textdomain);
+				return is_string($translated) ? $translated : $text;
 			}
 		} catch (\Throwable) {
 			// fall through
@@ -1092,7 +1096,7 @@ abstract class Ui extends Wire
 	 */
 	private function resolveActiveLanguageId(): int
 	{
-		$user = $this->wire()?->user;
+		$user = $this->wire()->user;
 		if ($user !== null && isset($user->language) && is_object($user->language) && isset($user->language->id)) {
 			return (int) $user->language->id;
 		}
@@ -1422,10 +1426,10 @@ abstract class Ui extends Wire
 		try {
 			return $this->renderToString();
 		} catch (\Throwable $e) {
-			$this->wire()?->log?->error(
+			$this->wire()->log->error(
 				'HTMX UI Rendering Error (' . static::class . '): ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine()
 			);
-			$config = $this->wire()?->config;
+			$config = $this->wire()->config;
 			if ($config !== null && !empty($config->debug)) {
 				return '<!-- HTMX UI Rendering Error: ' . htmlspecialchars($e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine(), ENT_QUOTES, 'UTF-8') . ' -->';
 			}
