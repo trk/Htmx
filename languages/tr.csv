@@ -1,0 +1,57 @@
+en,tr,description,file,hash
+"HTMX Component Endpoint URL","HTMX Bileşen Uç Noktası URL'si",,site/modules/Htmx/Htmx.module.php,3ec485aa48e74751292403c553005bcb
+"The dedicated stateless path where HTMX Component POST/QUERY actions are dispatched to (e.g. `hx/req`). Must be a valid URI path.","HTMX Bileşen POST/QUERY eylemlerinin yönlendirildiği özel durumsuz yol (ör. `hx/req`). Geçerli bir URI yolu olmalıdır.",,site/modules/Htmx/Htmx.module.php,8c7cbd98300b22e1c9c60f6e88ec4ff6
+"Components Directory Path","Bileşenler Dizin Yolu",,site/modules/Htmx/Htmx.module.php,35c5b07df2b15553205992110b868200
+"The directory relative to your `site/` folder where HTMX components are stored. Default is `components/`. If this directory exists, classes inside it will be registered under the `Htmx\Component` namespace.","HTMX bileşenlerinin saklandığı `site/` klasörüne göreli dizin. Varsayılan `components/` değeridir. Bu dizin mevcutsa içindeki sınıflar `Htmx\Component` ad alanı altına kaydedilir.",,site/modules/Htmx/Htmx.module.php,0069f7d4bc3e2182ca02788c4fd5c325
+"UI Directory Path","UI Dizin Yolu",,site/modules/Htmx/Htmx.module.php,27cf61ddf43c08070a7c0adaea72de4a
+"The directory relative to your `site/` folder where UI elements are stored. Default is `ui/`. If this directory exists, classes inside it will be registered under the `Htmx\Ui` namespace.","UI öğelerinin saklandığı `site/` klasörüne göreli dizin. Varsayılan `ui/` değeridir. Bu dizin mevcutsa içindeki sınıflar `Htmx\Ui` ad alanı altına kaydedilir.",,site/modules/Htmx/Htmx.module.php,feae57cc44b992ea8926725a6f4dc7f2
+"Allow Component Paths in File Render","Dosya İşlemede Bileşen Yollarına İzin Ver",,site/modules/Htmx/Htmx.module.php,19e80f59c4c536e928d9e10b847da380
+"When enabled, the configured components and UI directories will be automatically added to `allowedPaths` in `$files->render()`.","Etkinleştirildiğinde, yapılandırılan bileşen ve UI dizinleri `$files->render()` içindeki `allowedPaths` listesine otomatik olarak eklenir.",,site/modules/Htmx/Htmx.module.php,d5ffc1ac6146b1f15a8834cb32670291
+"Load Frontend Assets","Ön Yüz Varlıklarını Yükle",,site/modules/Htmx/Htmx.module.php,74fb7fbd4c3991375968c0a6144d7af7
+"Check to inject HTMX scripts into `<head>` dynamically on frontend pages.","Ön yüz sayfalarında HTMX betiklerini dinamik olarak `<head>` içine eklemek için işaretleyin.",,site/modules/Htmx/Htmx.module.php,9872f686ab5d958ea9841e2b30ff5b7d
+"Load _hyperscript","_hyperscript Yükle",,site/modules/Htmx/Htmx.module.php,85bcba455d46d229cb966fb2ad9a3355
+"Check to inject the `_hyperscript` library alongside HTMX on frontend pages (Always active in Admin).","Ön yüz sayfalarında HTMX ile birlikte `_hyperscript` kitaplığını eklemek için işaretleyin (Yönetim panelinde her zaman etkindir).",,site/modules/Htmx/Htmx.module.php,78a1a2c46fa930e9a9b7166671f1755f
+"Auto Flash Messages to HTMX","Anlık Bildirimleri Otomatik Olarak HTMX'e İlet",,site/modules/Htmx/Htmx.module.php,19826e17f4de3d15bb4ebd96ddf18ddd
+"When enabled, ProcessWire notices will be transformed into deferred `pw-messages` HTMX client events (dispatched after swap).","Etkinleştirildiğinde, ProcessWire bildirimleri ertelenmiş `pw-messages` HTMX istemci olaylarına dönüştürülür (takas sonrasında tetiklenir).",,site/modules/Htmx/Htmx.module.php,c9127b4fd135205f4e713da02ba17987
+"Auto Target Extraction (Partial Rendering)","Otomatik Hedef Ayıklama (Kısmi İşleme)",,site/modules/Htmx/Htmx.module.php,1aa0b0c31089767dfd95c69cce68fa88
+"When enabled, the module will try to auto-extract the HTML matching `HX-Target` from the final full page render if it is a standard HTMX request.","Etkinleştirildiğinde modül, standart bir HTMX isteği söz konusuysa tam sayfa çıktısından `HX-Target` ile eşleşen HTML parçasını otomatik olarak ayıklamayı dener.",,site/modules/Htmx/Htmx.module.php,5197bb9a33127b6ca02b67f42c4fc517
+"Tracy Debug Bar Support (Debug Only)","Tracy Hata Ayıklama Çubuğu Desteği (Yalnızca Hata Ayıklama)",,site/modules/Htmx/Htmx.module.php,f0e08e1a003213f84d2b33f554b6d48e
+"When enabled and ProcessWire debug mode is on, adds an HTMX Tracy panel and emits debug response headers.","Etkinleştirildiğinde ve ProcessWire hata ayıklama modu açık olduğunda bir HTMX Tracy paneli ekler ve hata ayıklama yanıt üstbilgileri gönderir.",,site/modules/Htmx/Htmx.module.php,e763186fcb9581c957f68e44ed6e717d
+"Enable HTMX v4 Extensions","HTMX v4 Eklentilerini Etkinleştir",,site/modules/Htmx/Htmx.module.php,43b542382f700849a5781d5a1d8269ec
+"Check which HTMX v4 extensions you want injected locally. Only extensions currently bundled with this module are listed.","Yerel olarak eklenmesini istediğiniz HTMX v4 eklentilerini seçin. Yalnızca bu modülle birlikte gelen eklentiler listelenir.",,site/modules/Htmx/Htmx.module.php,466a7de4b03629e6a5a2ca7a76fc4e20
+"WebSockets — Bi-directional server communication.","WebSockets — Çift yönlü sunucu iletişimi.",,site/modules/Htmx/Htmx.module.php,0af4dc7982d752f87485501f869b9f17
+"Server-Sent Events — Uni-directional streams.","Server-Sent Events — Tek yönlü akışlar.",,site/modules/Htmx/Htmx.module.php,7f6b4b38975f7647734cc79cfcc430fb
+"Head Merge — Merge <head> tags during swaps.","Head Merge — Takaslar sırasında <head> etiketlerini birleştirir.",,site/modules/Htmx/Htmx.module.php,c8270fae53a66d4a0728dfa1539ffcc6
+"Preload — Background link preloading.","Preload — Arka planda bağlantı ön yüklemesi.",,site/modules/Htmx/Htmx.module.php,c9a55f7ec0647f91786276f87557e4bc
+"Response Targets — Swap to multiple targets at once.","Response Targets — Aynı anda birden fazla hedefe takas yapar.",,site/modules/Htmx/Htmx.module.php,ff8549b284cf9b63bd8183cbd7c21287
+"Prompt — Interactive prompt dialog support.","Prompt — Etkileşimli istem iletişim kutusu desteği.",,site/modules/Htmx/Htmx.module.php,ac499d6535054221fa73f22b424d47da
+"CSP — Nonce-based Content Security Policy support.","CSP — Nonce tabanlı İçerik Güvenlik Politikası desteği.",,site/modules/Htmx/Htmx.module.php,a75e49b5d9b1952213532f1a55bf9246
+"Alpine Compat — Alpine.js interop helper.","Alpine Compat — Alpine.js birlikte çalışabilirlik yardımcısı.",,site/modules/Htmx/Htmx.module.php,a0242cbbc9e3ac7a683550f54b13fe00
+"Multipart — Robust file upload encoding helper.","Multipart — Güvenilir dosya yükleme kodlama yardımcısı.",,site/modules/Htmx/Htmx.module.php,0f9df83dafd4677a39bb3a20e16cc6a4
+"History Cache — Aggressive bfcache-style history restore.","History Cache — Hızlı bfcache tarzı geçmiş geri yükleme.",,site/modules/Htmx/Htmx.module.php,5cf3d886029e8782038c12829e1f24c5
+"Live — Declarative live region/polling helpers.","Live — Bildirimsel canlı bölge ve yoklama yardımcıları.",,site/modules/Htmx/Htmx.module.php,f68b0f6538b6290301af5d316da87923
+"Browser Indicator — Native favicon/title busy indicators.","Browser Indicator — Yerel sekme simgesi ve başlık meşgul göstergeleri.",,site/modules/Htmx/Htmx.module.php,c4a4d4ab8fffbad1290dacefe79ce142
+"Download — Trigger file downloads from responses.","Download — Yanıtlardan dosya indirmelerini tetikler.",,site/modules/Htmx/Htmx.module.php,f8cd250100eaf54809519af24eb1b43b
+"Pending — Declarative busy-state class management.","Pending — Bildirimsel meşgul durumu sınıf yönetimi.",,site/modules/Htmx/Htmx.module.php,0b06af5c48b20c8b09400390b73cc7e7
+"P-Tag — Wrap inline text nodes in paragraphs.","P-Tag — Satır içi metin düğümlerini paragraflara sarar.",,site/modules/Htmx/Htmx.module.php,ccd26d21043aaba151ede4542bf09b19
+"Upsert — Insert OR update rows by selector.","Upsert — Seçiciye göre satır ekler veya günceller.",,site/modules/Htmx/Htmx.module.php,e3abf2899703ab14b547ed2d748168a6
+"HtmxCache cleared (%d compiled cache files removed).","HtmxCache temizlendi (%d derlenmiş önbellek dosyası silindi).",,site/modules/Htmx/Htmx.module.php,4427cce5e90a41477b8372cc3e1a64ca
+"HtmxCache pruned (%d stale cache files removed).","HtmxCache budandı (%d eski önbellek dosyası silindi).",,site/modules/Htmx/Htmx.module.php,785451aa9ee65886932effb6b4c21b23
+"HtmxCache — UI & Component Compilation Cache","HtmxCache — UI ve Bileşen Derleme Önbelleği",,site/modules/Htmx/Htmx.module.php,66ea15369a6169f1374a268d76b0d59b
+"Enable HtmxCache Compilation","HtmxCache Derlemesini Etkinleştir",,site/modules/Htmx/Htmx.module.php,fe331405bb186f58a4d5d351a5eeac25
+"Compiles UI element shapes, zone layouts, and Component reflection schemas into OPcache-backed PHP files under `site/assets/cache/Htmx/`.","UI öğe şekillerini, bölge yerleşimlerini ve Bileşen yansıma şemalarını `site/assets/cache/Htmx/` altında OPcache destekli PHP dosyalarına derler.",,site/modules/Htmx/Htmx.module.php,a91be782dad140ccbdbbf2d578f3f82c
+"Max Compiled Shapes per UI Class (LRU Cap)","UI Sınıfı Başına Maksimum Derlenmiş Şekil (LRU Sınırı)",,site/modules/Htmx/Htmx.module.php,88d875207a50b8e1176730f87860ea1e
+"Maximum number of compiled `.php` shape variants retained per UI class before older unused shapes are automatically evicted.","Kullanılmayan eski şekiller otomatik olarak çıkarılmadan önce her UI sınıfı için tutulan maksimum derlenmiş `.php` şekil varyantı sayısı.",,site/modules/Htmx/Htmx.module.php,ecad821e89837812cb893445ae486bcd
+"Cache Maintenance","Önbellek Bakımı",,site/modules/Htmx/Htmx.module.php,ac6d3a7660ced425488d92168a1fd4b3
+"Active cache directory: `%1$s` — UI shape files: %2$d, Component cache files: %3$d, Total size: %4$s KB.","Etkin önbellek dizini: `%1$s` — UI şekil dosyaları: %2$d, Bileşen önbellek dosyaları: %3$d, Toplam boyut: %4$s KB.",,site/modules/Htmx/Htmx.module.php,24e076f905529991f6c40641b8200693
+"No action","İşlem yok",,site/modules/Htmx/Htmx.module.php,fa46ea6f6f6623fdd7039b5f1a8f3940
+"Prune stale cache files","Eski önbellek dosyalarını buda",,site/modules/Htmx/Htmx.module.php,399dbd90096bd72ed93abb237194680e
+"Clear all compiled cache files","Tüm derlenmiş önbellek dosyalarını temizle",,site/modules/Htmx/Htmx.module.php,37765fc31e7265c03f618090505c93ae
+"State-changing actions are disabled in demo mode.","Durum değiştiren eylemler demo modunda devre dışıdır.",,site/modules/Htmx/Htmx.module.php,0dc36b32fb6da7b3f218a6bb72bd46bb
+"Demo Mode","Demo Modu",,site/modules/Htmx/src/Component.php,943bfde19aa3b18b6cdb713ed55fcd2e
+"State-changing actions are disabled in demo mode.","Durum değiştiren eylemler demo modunda devre dışıdır.",,site/modules/Htmx/src/Component.php,0dc36b32fb6da7b3f218a6bb72bd46bb
+"This action is disabled in demo mode.","Bu eylem demo modunda devre dışıdır.",,site/modules/Htmx/src/Request.php,452fd771c65c3fff4f51aec7a24e73cf
+"CSRF Validation Failed. State-changing requests require a mutating HTTP method.","CSRF Doğrulaması Başarısız. Durum değiştiren istekler değiştirici bir HTTP yöntemi gerektirir.",,site/modules/Htmx/src/Request.php,eca88fa55850022009454383637e12db
+"CSRF Validation Failed: Session CSRF manager unavailable.","CSRF Doğrulaması Başarısız: Oturum CSRF yöneticisi kullanılamıyor.",,site/modules/Htmx/src/Request.php,e0cfd0de6c0efc8452b93abb15c2b5ad
+"CSRF Validation Failed: CSRF manager incompatible.","CSRF Doğrulaması Başarısız: CSRF yöneticisi uyumsuz.",,site/modules/Htmx/src/Request.php,d1e53d4251f3c69431a410e4d161cc89
+"CSRF Validation Failed. Unauthorized HTMX request.","CSRF Doğrulaması Başarısız. Yetkisiz HTMX isteği.",,site/modules/Htmx/src/Request.php,17e0fc52d6de1bb497c91c8c82cd1198
