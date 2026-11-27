@@ -957,7 +957,7 @@ class HardeningLocaleBadgeUi extends Ui
 
 	protected function compileTemplate(array $shape): string
 	{
-		$langId = (int) ($this->wire()?->user?->language?->id ?? 0);
+		$langId = (int) ($this->wire()->user->language?->id ?? 0);
 		return "static function (array \$s, array \$attrs, string \$children): string {\n"
 			. "\treturn '<span' . (\$attrs['root'] ?? '') . '>lang:{$langId}:' . (\$s['code'] ?? '') . '</span>';\n"
 			. "}";

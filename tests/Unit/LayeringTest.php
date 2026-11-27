@@ -30,7 +30,7 @@ final class LayeringScanner
 	public const bool ALLOW_SIBLING_INTEGRATIONS = false;
 
 	/** @var list<string> Third-party code shipped inside the module, relative to the module root. */
-	public const array VENDORED_PATHS = ["resources\/htmx\/","resources\/_hyperscript\/"];
+	public const array VENDORED_PATHS = ["resources/htmx/", "resources/_hyperscript/"];
 
 	/** @var list<string> */
 	public const array KNOWN_VIOLATIONS = [];
