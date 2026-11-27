@@ -5,7 +5,7 @@ risk: safe
 source: processwire-boost
 date_added: "2026-11-18"
 metadata:
-  version: 216
+  version: 217
   htmx-version: 4
   processwire-version: ">=3.0.271"
   php-version: ">=8.4"
